@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-const WORDS: [&'static str; 12972] = [
+pub const WORDS: [&'static str; 12972] = [
     "aahed", "aalii", "aargh", "aarti", "abaca", "abaci", "aback", "abacs", "abaft", "abaka",
     "abamp", "aband", "abase", "abash", "abask", "abate", "abaya", "abbas", "abbed", "abbes",
     "abbey", "abbot", "abcee", "abeam", "abear", "abele", "abers", "abets", "abhor", "abide",

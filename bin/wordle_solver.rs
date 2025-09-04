@@ -1,10 +1,9 @@
-mod filter;
-mod info;
-mod ranking;
-mod words;
-
-use filter::{Filter, get_best_first_guess};
-use ranking::{HybridStrategy, LetterFrequencyStrategy, RankingStrategy};
+use eloquentle::{
+    filter::{Filter, get_best_first_guess},
+    game::WordleGame,
+    ranking::{HybridStrategy, LetterFrequencyStrategy, RankingStrategy},
+};
+use std::collections::HashSet;
 use std::time::Instant;
 
 fn main() {
@@ -74,16 +73,22 @@ fn main() {
     let target_word = "rates";
     println!("Target word: {}", target_word);
 
+    // Create a game instance
+    let game = WordleGame::new(target_word.to_string());
+
     // First guess
     let start_time = Instant::now();
     let guess1 = "arise"; // Using a fixed first guess
     let _duration = start_time.elapsed();
     println!("First guess: {} (instant because it's hardcoded)", guess1);
 
-    let pattern1 = filter2.simulate_guess(guess1, target_word);
+    // Get feedback from the game
+    let info_set1 = game.get_feedback(guess1);
+    filter2.add_info_set(&info_set1);
+
     println!(
-        "Pattern: {:?} ({} words remain)",
-        pattern1,
+        "Feedback: {:?} ({} words remain)",
+        info_set1,
         filter2.remaining_count()
     );
 
@@ -94,10 +99,13 @@ fn main() {
         let duration = start_time.elapsed();
         println!("Second guess: {} (calculated in {:?})", guess2, duration);
 
-        let pattern2 = filter2.simulate_guess(&guess2, target_word);
+        // Get feedback from the game
+        let info_set2 = game.get_feedback(&guess2);
+        filter2.add_info_set(&info_set2);
+
         println!(
-            "Pattern: {:?} ({} words remain)",
-            pattern2,
+            "Feedback: {:?} ({} words remain)",
+            info_set2,
             filter2.remaining_count()
         );
 
@@ -108,10 +116,13 @@ fn main() {
             let duration = start_time.elapsed();
             println!("Third guess: {} (calculated in {:?})", guess3, duration);
 
-            let pattern3 = filter2.simulate_guess(&guess3, target_word);
+            // Get feedback from the game
+            let info_set3 = game.get_feedback(&guess3);
+            filter2.add_info_set(&info_set3);
+
             println!(
-                "Pattern: {:?} ({} words remain)",
-                pattern3,
+                "Feedback: {:?} ({} words remain)",
+                info_set3,
                 filter2.remaining_count()
             );
         }
@@ -204,4 +215,21 @@ fn main() {
         "Hybrid strategy recommendation: {} (in {:?})",
         hybrid_guess, duration
     );
+
+    // Demonstrate the new Info system
+    println!("\n=== Info System Demonstration ===");
+    let mut info_filter = Filter::default();
+
+    // Add some information manually
+    info_filter.add_info(eloquentle::Info::Correct('s', 0));
+    info_filter.add_info(eloquentle::Info::NotAt('a', 1));
+    info_filter.add_info(eloquentle::Info::Not('e'));
+
+    println!(
+        "After adding info: {} words remain",
+        info_filter.remaining_count()
+    );
+
+    // Show the collected info
+    println!("Collected info: {:?}", info_filter.get_info());
 }
