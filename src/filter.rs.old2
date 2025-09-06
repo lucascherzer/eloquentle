@@ -114,6 +114,17 @@ impl Filter {
     /// arbitrary).
     ///
     /// By default, this only considers words from the remaining candidates.
+    /// Recommends the best word to guess next based on information theory
+    /// principles.
+    ///
+    /// This uses entropy calculations to find the guess that will divide
+    /// the remaining possible words into distinct groups.
+    ///
+    /// Returns the word with the highest entropy score. If multiple words have
+    /// the same score, it returns the first one found (deterministic but
+    /// arbitrary).
+    ///
+    /// By default, this only considers words from the remaining candidates.
     pub fn recommend_guess(&self) -> String {
         // If we're at the start with all words, use the precomputed best guess
         if self.words.len() == WORDS.len() {
@@ -128,6 +139,11 @@ impl Filter {
         // Always consider the full dictionary to find words that can efficiently
         // test multiple possible letters at once, even if they're not candidates
         self.recommend_guess_from_candidates(true)
+    }
+            }
+        }
+
+        self.recommend_guess_from_candidates(false)
     }
 
     /// Recommends the best word to guess next based on information theory
@@ -144,17 +160,19 @@ impl Filter {
                 .map_or(String::from(""), |w| w.to_string());
         }
 
+        // When use_full_dictionary is true, we consider all possible words,
+        // which helps in scenarios where we need to test multiple letters efficiently
         let candidate_guesses: Vec<&str> = if use_full_dictionary {
             WORDS.to_vec()
         } else {
             self.words.iter().map(|rc_str| **rc_str).collect()
         };
 
-        if !use_full_dictionary && self.words.len() == WORDS.len() {
+        if self.words.len() == WORDS.len() {
             return get_best_first_guess().to_string();
         }
 
-        if self.words.len() <= 3 && !use_full_dictionary {
+        if self.words.len() <= 3 {
             return self.words[0].to_string();
         }
 
@@ -378,6 +396,100 @@ impl Filter {
         for info in &info_clone {
             self.apply_single_info(info);
         }
+
+        /// Detects if we have a pattern where only one position is unknown
+        /// Returns Some(position) if there's exactly one unknown position, None otherwise
+        pub fn detect_one_unknown_position(&self) -> Option<usize> {
+            // Skip this optimization if we have too many candidates
+            if self.words.len() > 15 {
+                return None;
+            }
+
+            // We need at least 2 candidates for this to be useful
+            if self.words.len() < 2 {
+                return None;
+            }
+
+            // Get the first word as a reference
+            let first_word = self.words[0].as_ref().chars().collect::<Vec<_>>();
+
+            // Count positions that differ across candidates
+            let mut unknown_positions = Vec::new();
+
+            for (i, &c) in first_word.iter().enumerate() {
+                let all_same = self.words.iter().all(|word| word.chars().nth(i) == Some(c));
+
+                if !all_same {
+                    unknown_positions.push(i);
+                }
+            }
+
+            // Return the position if there's exactly one unknown
+            if unknown_positions.len() == 1 {
+                Some(unknown_positions[0])
+            } else {
+                None
+            }
+        }
+
+        /// Recommends a guess for the case where only one position is unknown
+        /// Returns a word that tests as many candidate letters as possible
+        pub fn recommend_guess_for_one_unknown(&self, position: usize) -> Option<String> {
+            // Get all possible letters for the unknown position
+            let mut possible_letters = std::collections::HashSet::new();
+
+            for word in &self.words {
+                if let Some(c) = word.chars().nth(position) {
+                    possible_letters.insert(c);
+                }
+            }
+
+            // Find a word that contains as many of these letters as possible
+            // but doesn't use up our precious guesses on candidates
+
+            // Start with the full dictionary for maximum coverage
+            let mut best_coverage = 0;
+            let mut best_word = None;
+
+            // Template for constructing a word that tests multiple possibilities
+            let word_template = if self.words.len() > 0 {
+                self.words[0].chars().collect::<Vec<_>>()
+            } else {
+                return None;
+            };
+
+            for &word in WORDS {
+                // Skip if the word is in our candidates to avoid wasting guesses
+                if self.words.iter().any(|w| **w == word) {
+                    continue;
+                }
+
+                // Count how many of our possible letters this word contains
+                let mut coverage = 0;
+                let mut seen = std::collections::HashSet::new();
+
+                for c in word.chars() {
+                    if possible_letters.contains(&c) && !seen.contains(&c) {
+                        coverage += 1;
+                        seen.insert(c);
+                    }
+                }
+
+                // Update if this is the best coverage we've seen
+                if coverage > best_coverage {
+                    best_coverage = coverage;
+                    best_word = Some(word.to_string());
+                }
+
+                // Perfect coverage - we found a word that tests all possibilities
+                if coverage == possible_letters.len() {
+                    return Some(word.to_string());
+                }
+            }
+
+            // Return the best word if it tests at least 2 letters
+            if best_coverage >= 2 { best_word } else { None }
+        }
     }
 }
 
@@ -389,7 +501,6 @@ mod tests {
     fn create_test_filter(words: Vec<&'static str>) -> Filter {
         Filter {
             words: words.into_iter().map(|w| Rc::new(w)).collect(),
-            info: std::collections::HashSet::new(),
         }
     }
 

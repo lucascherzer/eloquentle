@@ -125,9 +125,7 @@ impl Filter {
             return self.words[0].to_string();
         }
 
-        // Always consider the full dictionary to find words that can efficiently
-        // test multiple possible letters at once, even if they're not candidates
-        self.recommend_guess_from_candidates(true)
+        self.recommend_guess_from_candidates(false)
     }
 
     /// Recommends the best word to guess next based on information theory
@@ -389,7 +387,6 @@ mod tests {
     fn create_test_filter(words: Vec<&'static str>) -> Filter {
         Filter {
             words: words.into_iter().map(|w| Rc::new(w)).collect(),
-            info: std::collections::HashSet::new(),
         }
     }
 
