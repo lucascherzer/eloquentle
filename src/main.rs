@@ -23,7 +23,7 @@ fn main() {
 
     // Compare with calculating the first guess - might be slow
     let start_time = Instant::now();
-    let first_guess_calculated = filter.recommend_guess_from_candidates(true);
+    let first_guess_calculated = filter.recommend_guess_from_candidates();
     let duration = start_time.elapsed();
     println!(
         "Calculated first guess: {} (calculated in {:?})",

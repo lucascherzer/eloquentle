@@ -8,10 +8,6 @@ name = "eloquentle"
 path = "src/lib.rs"
 
 [[bin]]
-name = "wordle_solver"
-path = "bin/wordle_solver.rs"
-
-[[bin]]
 name = "eloquentle"
 path = "bin/eloquentle.rs"
 

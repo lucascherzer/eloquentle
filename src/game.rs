@@ -114,14 +114,14 @@ mod tests {
         let game = WordleGame::new("hello".to_string());
         let feedback = game.get_feedback("below");
 
+        // 'b' is not in the word
+        assert!(feedback.contains(&Info::Not('b')));
         // 'e' is correct at position 1
         assert!(feedback.contains(&Info::Correct('e', 1)));
         // 'l' is correct at position 2
         assert!(feedback.contains(&Info::Correct('l', 2)));
-        // 'o' is correct at position 4
-        assert!(feedback.contains(&Info::Correct('o', 4)));
-        // 'b' is not in the word
-        assert!(feedback.contains(&Info::Not('b')));
+        // 'o' is correct at position 3
+        assert!(feedback.contains(&Info::NotAt('o', 3)));
         // 'w' is not in the word
         assert!(feedback.contains(&Info::Not('w')));
     }
@@ -131,12 +131,11 @@ mod tests {
         let game = WordleGame::new("hello".to_string());
         let feedback = game.get_feedback("label");
 
-        // 'l' appears twice in target, once correctly placed
-        assert!(feedback.contains(&Info::Correct('l', 2)));
-        assert!(feedback.contains(&Info::NotAt('l', 1)));
-        assert!(feedback.contains(&Info::NotAt('e', 4)));
+        assert!(feedback.contains(&Info::NotAt('l', 0)));
         assert!(feedback.contains(&Info::Not('a')));
         assert!(feedback.contains(&Info::Not('b')));
+        assert!(feedback.contains(&Info::NotAt('e', 3)));
+        assert!(feedback.contains(&Info::NotAt('l', 4)));
     }
 
     #[test]

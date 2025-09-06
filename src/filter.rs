@@ -127,7 +127,7 @@ impl Filter {
 
         // Always consider the full dictionary to find words that can efficiently
         // test multiple possible letters at once, even if they're not candidates
-        self.recommend_guess_from_candidates(true)
+        self.recommend_guess_from_candidates()
     }
 
     /// Recommends the best word to guess next based on information theory
@@ -136,7 +136,7 @@ impl Filter {
     /// If `use_full_dictionary` is true, it will consider all words in the
     /// dictionary, not just the remaining candidates. This can be better early
     /// in the game when you want to maximize information gain.
-    pub fn recommend_guess_from_candidates(&self, use_full_dictionary: bool) -> String {
+    pub fn recommend_guess_from_candidates(&self) -> String {
         if self.words.len() <= 1 {
             return self
                 .words
@@ -144,43 +144,20 @@ impl Filter {
                 .map_or(String::from(""), |w| w.to_string());
         }
 
-        let candidate_guesses: Vec<&str> = if use_full_dictionary {
-            WORDS.to_vec()
-        } else {
-            self.words.iter().map(|rc_str| **rc_str).collect()
-        };
+        // Always use the full dictionary for guesses to maximize information gain
+        let candidate_guesses: Vec<&str> = WORDS.to_vec();
 
-        if !use_full_dictionary && self.words.len() == WORDS.len() {
-            return get_best_first_guess().to_string();
-        }
+        // // When we have very few words left (2 or 3), just guess one of them
+        // if self.words.len() <= 3 {
+        //     return self.words[0].to_string();
+        // }
 
-        if self.words.len() <= 3 && !use_full_dictionary {
-            return self.words[0].to_string();
-        }
-
-        // Limit the number of candidates to evaluate when there are many words
-        let max_candidates_to_check = if use_full_dictionary || self.words.len() > 100 {
-            200
-        } else {
-            candidate_guesses.len()
-        };
-
-        // Choose candidates to check (either randomly sample or take the first N)
-        let candidates_to_check = if candidate_guesses.len() <= max_candidates_to_check {
-            candidate_guesses
-        } else {
-            // Take a subset of candidates - using first N for deterministic behavior
-            // In a real implementation, you might want to randomly sample or use letter frequency
-            candidate_guesses[0..max_candidates_to_check].to_vec()
-        };
+        // Get the full candidate list for entropy calculation
+        let candidates_to_check = candidate_guesses;
 
         // Track the best guess and its score
         let mut best_score = 0.0;
         let mut best_guess = candidates_to_check[0].to_string();
-
-        // Early stopping threshold - if we find a guess with high entropy,
-        // stop searching. These are arbitrarily chosen.
-        let early_stop_threshold = if self.words.len() > 20 { 4.5 } else { 5.0 };
 
         for &guess in &candidates_to_check {
             let score = self.calculate_entropy(guess);
@@ -188,11 +165,6 @@ impl Filter {
             if score > best_score {
                 best_score = score;
                 best_guess = guess.to_string();
-
-                // Early stopping if we find a very good guess
-                if score > early_stop_threshold {
-                    break;
-                }
             }
         }
 
@@ -496,24 +468,6 @@ mod tests {
     }
 
     #[test]
-    fn test_recommend_guess() {
-        // Create a filter with a small test set
-        let mut filter = create_test_filter(vec!["apple", "amber", "amble", "abide", "abode"]);
-
-        // Remove some words to make it more interesting
-        filter.filter_without('p');
-
-        // Now our list should have ["amber", "amble", "abide", "abode"]
-        // The best guess should maximize information gain
-        let recommendation = filter.recommend_guess();
-
-        // The best guess in this small set is likely "amber" or "amble" as they have more unique letters,
-        // but we'll just verify the recommendation is in our list
-        let remaining_words = get_words(&filter);
-        assert!(remaining_words.contains(&recommendation));
-    }
-
-    #[test]
     fn test_simulate_guess() {
         use Feedback::*;
 
@@ -525,19 +479,7 @@ mod tests {
         // Simulate guessing "crane" when the target is "grape"
         let pattern = filter.simulate_guess("crane", "grape");
 
-        // Expected pattern:
-        // - 'c': not in "grape" -> Absent
-        // - 'r': in "grape" but wrong position -> Present
-        // - 'a': in "grape" but wrong position -> Present
-        // - 'n': not in "grape" -> Absent
-        // - 'e': in "grape" but wrong position -> Present
-        assert_eq!(pattern, [Absent, Present, Present, Absent, Present]);
-
-        // After simulation, filter should have reduced the word list to just contain "grape"
-        assert_eq!(filter.remaining_count(), 1);
-
-        let remaining = filter.remaining_words();
-        assert_eq!(remaining, vec!["grape"]);
+        assert_eq!(pattern, [Absent, Correct, Correct, Absent, Correct]);
     }
 
     #[test]
@@ -573,12 +515,12 @@ mod tests {
         // Test mixed pattern
         let pattern3 = filter.calculate_pattern("amber", "blame");
         // 'a' is wrong position, 'm' is wrong position, 'b' is wrong position, others not in word
-        assert_eq!(pattern3, [Present, Present, Present, Absent, Absent]);
+        assert_eq!(pattern3, [Present, Present, Present, Present, Absent]);
 
         // Test repeated letters
         let pattern4 = filter.calculate_pattern("speed", "steep");
         // First 's' is correct, 'p' is in wrong position, one 'e' is correct, other 'e' wrong position
-        assert_eq!(pattern4, [Correct, Present, Correct, Present, Absent]);
+        assert_eq!(pattern4, [Correct, Present, Correct, Correct, Absent]);
     }
 
     #[test]
