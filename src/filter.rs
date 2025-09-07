@@ -147,11 +147,6 @@ impl Filter {
         // Always use the full dictionary for guesses to maximize information gain
         let candidate_guesses: Vec<&str> = WORDS.to_vec();
 
-        // // When we have very few words left (2 or 3), just guess one of them
-        // if self.words.len() <= 3 {
-        //     return self.words[0].to_string();
-        // }
-
         // Get the full candidate list for entropy calculation
         let candidates_to_check = candidate_guesses;
 
