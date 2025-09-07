@@ -2,7 +2,7 @@ use std::{collections::HashSet, rc::Rc};
 
 use crate::{
     info::Info,
-    words::{WORDS, get_rc_words},
+    words::{SOLUTION_WORDS, WORDS, get_rc_solution_words, get_rc_words},
 };
 
 /// Converts a feedback pattern to a string representation for use as a hash key.
@@ -32,6 +32,7 @@ pub type Pattern = [Feedback; 5];
 pub struct Filter {
     words: Vec<Rc<&'static str>>,
     info: HashSet<Info>,
+    use_solution_words_only: bool,
 }
 
 /// Returns the precomputed best first guess based on entropy analysis of the
@@ -44,7 +45,7 @@ pub fn get_best_first_guess() -> &'static str {
     // NOTE: Apparently, the NYT has a subset of the wordlist that they choose
     // the word of the day from. This result does not take that into account,
     // it takes the whole list of valid words.
-    "tares"
+    "salet"
 }
 
 /// Converts a pattern to a set of Info objects
@@ -116,7 +117,13 @@ impl Filter {
     /// By default, this only considers words from the remaining candidates.
     pub fn recommend_guess(&self) -> String {
         // If we're at the start with all words, use the precomputed best guess
-        if self.words.len() == WORDS.len() {
+        if self.words.len()
+            == (if self.use_solution_words_only {
+                SOLUTION_WORDS.len()
+            } else {
+                WORDS.len()
+            })
+        {
             return get_best_first_guess().to_string();
         }
 
@@ -288,17 +295,42 @@ impl Default for Filter {
         Filter {
             words: get_rc_words(),
             info: HashSet::new(),
+            use_solution_words_only: false,
         }
     }
 }
 
 impl Filter {
-    /// Creates a new Filter with the given words
-    pub fn new_with_words(words: Vec<Rc<&'static str>>) -> Self {
+    /// Creates a new filter with the given list of words
+    pub fn new_with_words(words: Vec<&'static str>) -> Self {
         Filter {
-            words,
+            words: words.iter().map(|w| Rc::new(*w)).collect(),
             info: HashSet::new(),
+            use_solution_words_only: false,
         }
+    }
+
+    /// Creates a new filter using only the solution words subset
+    pub fn new_with_solution_words() -> Self {
+        Filter {
+            words: get_rc_solution_words(),
+            info: HashSet::new(),
+            use_solution_words_only: true,
+        }
+    }
+
+    /// Set whether to use only solution words when resetting
+    pub fn set_use_solution_words_only(&mut self, use_solution_words_only: bool) {
+        if self.use_solution_words_only != use_solution_words_only {
+            self.use_solution_words_only = use_solution_words_only;
+            self.reset_words();
+            self.rebuild_from_info();
+        }
+    }
+
+    /// Check if only solution words are being used
+    pub fn uses_solution_words_only(&self) -> bool {
+        self.use_solution_words_only
     }
 
     /// Add a single piece of information and apply its filter
@@ -335,7 +367,11 @@ impl Filter {
 
     /// Reset to initial state with all words but keep collected info
     pub fn reset_words(&mut self) {
-        self.words = get_rc_words();
+        self.words = if self.use_solution_words_only {
+            get_rc_solution_words()
+        } else {
+            get_rc_words()
+        };
     }
 
     /// Reset to initial state with all words and reapply all info
@@ -357,6 +393,7 @@ mod tests {
         Filter {
             words: words.into_iter().map(|w| Rc::new(w)).collect(),
             info: std::collections::HashSet::new(),
+            use_solution_words_only: false,
         }
     }
 

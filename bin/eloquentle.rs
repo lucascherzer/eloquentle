@@ -8,14 +8,30 @@ use std::io::{self, BufRead, Write};
 
 /// A simple TUI for the Wordle solver
 fn main() {
-    // Create a new filter with the full word list
-    let mut filter = Filter::default();
+    // Check if we should use only the solution words (official Wordle candidates)
+    let args: Vec<String> = std::env::args().collect();
+    let use_solution_words = args
+        .iter()
+        .any(|arg| arg == "--solution-words" || arg == "-s");
+
+    // Create a new filter with either full word list or solution words only
+    let mut filter = if use_solution_words {
+        Filter::new_with_solution_words()
+    } else {
+        Filter::default()
+    };
 
     println!("===========================");
     println!("= ELOQUENTLE WORDLE SOLVER =");
     println!("===========================");
     println!("Welcome to the Eloquentle Wordle solver!");
-    println!("This tool will help you solve Wordle puzzles.\n");
+    println!("This tool will help you solve Wordle puzzles.");
+    if filter.uses_solution_words_only() {
+        println!("Using official Wordle solution candidates only.");
+    } else {
+        println!("Using full dictionary (includes words that will never be solutions).");
+    }
+    println!();
 
     // Suggest the best first guess
     let first_guess = get_best_first_guess();
@@ -65,6 +81,9 @@ fn main() {
         println!("  Y = Yellow (correct letter in wrong position)");
         println!("  N = Gray (letter not in the word)");
         println!("Example: GYNNY");
+        println!("Commands: 'quit' to exit, 'reset' to start over");
+        println!("          'solutions' to use only official Wordle solutions");
+        println!("          'all' to use the full dictionary");
 
         print!("> ");
         io::stdout().flush().unwrap();
@@ -80,10 +99,29 @@ fn main() {
             }
             "reset" => {
                 println!("Resetting the solver...");
-                filter = Filter::default();
+                // Maintain the same solution words setting when resetting
+                if filter.uses_solution_words_only() {
+                    filter = Filter::new_with_solution_words();
+                } else {
+                    filter = Filter::default();
+                }
                 turn = 1;
                 current_guess = get_best_first_guess().to_string();
                 println!("Best first guess: {}", current_guess);
+                continue;
+            }
+            "solutions" | "solution" | "s" => {
+                filter.set_use_solution_words_only(true);
+                filter.rebuild_from_info();
+                println!("Switched to official Wordle solution candidates only.");
+                continue;
+            }
+            "all" | "full" | "f" => {
+                filter.set_use_solution_words_only(false);
+                filter.rebuild_from_info();
+                println!(
+                    "Switched to full dictionary (includes words that will never be solutions)."
+                );
                 continue;
             }
             feedback if feedback.len() == 5 => {
