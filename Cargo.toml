@@ -12,3 +12,7 @@ name = "eloquentle"
 path = "bin/eloquentle.rs"
 
 [dependencies]
+ratatui = "0.24.0"
+crossterm = "0.27.0"
+unicode-width = "0.1.10"
+unicode-segmentation = "1.10.1"
