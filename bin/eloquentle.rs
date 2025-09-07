@@ -10,15 +10,15 @@ use eloquentle::{
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use std::{
     collections::HashSet,
     error::Error,
-    io, thread,
+    io,
     time::{Duration, Instant},
 };
 
@@ -36,7 +36,12 @@ struct App {
     feedback_input: String,
     loading_idx: usize,
     loading_frames: Vec<char>,
+    loading_bar_pos: usize,
+    loading_bar_direction: i8,
     loading_last_update: Instant,
+    error_message: Option<String>,
+    error_time: Option<Instant>,
+    history: Vec<(String, String)>, // (guess, feedback)
     quit: bool,
 }
 
@@ -50,7 +55,12 @@ impl App {
             feedback_input: String::new(),
             loading_idx: 0,
             loading_frames: vec!['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
+            loading_bar_pos: 0,
+            loading_bar_direction: 1,
             loading_last_update: Instant::now(),
+            error_message: None,
+            error_time: None,
+            history: Vec::new(),
             quit: false,
         }
     }
@@ -77,6 +87,16 @@ impl App {
     fn update_loading_animation(&mut self) {
         if self.loading_last_update.elapsed() > Duration::from_millis(100) {
             self.loading_idx = (self.loading_idx + 1) % self.loading_frames.len();
+
+            // Update loading bar position
+            if self.loading_bar_pos == 0 && self.loading_bar_direction == -1 {
+                self.loading_bar_direction = 1;
+            } else if self.loading_bar_pos == 10 && self.loading_bar_direction == 1 {
+                self.loading_bar_direction = -1;
+            }
+            self.loading_bar_pos =
+                ((self.loading_bar_pos as i8) + self.loading_bar_direction) as usize;
+
             self.loading_last_update = Instant::now();
         }
     }
@@ -92,20 +112,29 @@ impl App {
 
         self.state = AppState::Loading;
 
-        // In a real implementation, we would spawn a thread here to calculate the next guess
-        // For now, we'll just simulate a delay
-        thread::sleep(Duration::from_millis(500));
+        // Save the current guess and feedback to history
+        self.history
+            .push((self.current_guess.clone(), self.feedback_input.clone()));
 
-        // After "calculation" is done, update the current guess and return to Running state
-        if self.filter.remaining_count() <= 1 {
-            // We're done - keep the state as Running so we can show the final result
-        } else {
-            self.current_guess = self.filter.recommend_guess();
-        }
-        self.state = AppState::Running;
+        // Enter loading state to calculate the next guess
+        self.state = AppState::Loading;
         self.feedback_input.clear();
 
         Ok(())
+    }
+
+    fn show_error(&mut self, error: String) {
+        self.error_message = Some(error);
+        self.error_time = Some(Instant::now());
+    }
+
+    fn update_error_state(&mut self) {
+        if let Some(time) = self.error_time {
+            if time.elapsed() > Duration::from_secs(3) {
+                self.error_message = None;
+                self.error_time = None;
+            }
+        }
     }
 }
 
@@ -164,7 +193,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Update loading animation if in loading state
         if let AppState::Loading = app.state {
             app.update_loading_animation();
+
+            // Calculate the next guess immediately to prevent hanging
+            if app.loading_idx == 3 {
+                // After a few frames of animation
+                if app.filter.remaining_count() > 1 {
+                    app.current_guess = app.filter.recommend_guess();
+                }
+                app.state = AppState::Running;
+            }
         }
+
+        // Update error message if needed
+        app.update_error_state();
 
         // Handle input
         if event::poll(Duration::from_millis(100))? {
@@ -189,8 +230,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                             KeyCode::Enter => {
                                 if let Err(e) = app.submit_feedback() {
-                                    // TODO(ui): Show error message to user
-                                    println!("Error: {}", e);
+                                    app.show_error(e);
                                 }
                             }
                             KeyCode::Esc => {
@@ -232,14 +272,14 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 Constraint::Length(3), // Title
                 Constraint::Length(3), // Status bar
                 Constraint::Min(10),   // Main content area
-                Constraint::Length(3), // Input area
+                Constraint::Length(3), // Input area/Help text
             ]
             .as_ref(),
         )
         .split(size);
 
     // Title bar
-    let title = Paragraph::new("ELOQUENTLE WORDLE SOLVER")
+    let title = Paragraph::new("eloquentle")
         .style(
             Style::default()
                 .fg(Color::Green)
@@ -249,22 +289,77 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(title, chunks[0]);
 
+    // Add loading indicator to title bar if in loading state
+    if let AppState::Loading = app.state {
+        // Position the spinner in the top right corner of the title bar
+        let x = chunks[0].x + chunks[0].width - 4;
+        let y = chunks[0].y + 1;
+
+        // Render the loading spinner in the corner of the title bar
+        let spinner = Paragraph::new(app.loading_frames[app.loading_idx].to_string()).style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
+
+        f.render_widget(spinner, Rect::new(x, y, 1, 1));
+
+        // Also add "calculating..." text in the title area
+        let calc_text = Paragraph::new(" calculating...")
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(Alignment::Right);
+
+        f.render_widget(calc_text, Rect::new(x - 14, y, 14, 1));
+    }
+
     // Status bar with remaining candidates and turn information
     let candidates_text = format!(
-        "Turn: {} | Candidates: {} | {}",
+        "Turn: {} | Candidates: {}",
         app.turn,
-        app.filter.remaining_count(),
-        if app.filter.uses_solution_words_only() {
-            "Using solution words only"
-        } else {
-            "Using full dictionary"
-        }
+        app.filter.remaining_count()
     );
-    let status = Paragraph::new(candidates_text)
+
+    let status_block = Block::default().borders(Borders::ALL);
+    f.render_widget(status_block.clone(), chunks[1]);
+
+    // Calculate the inner area of the status block
+    let inner_area = status_block.inner(chunks[1]);
+    let gauge_area = Rect {
+        x: inner_area.x,
+        y: inner_area.y,
+        width: inner_area.width,
+        height: 1,
+    };
+
+    // Create the dictionary type indicator text
+    let dictionary_text = if app.filter.uses_solution_words_only() {
+        "Solution words only [s]"
+    } else {
+        "Full dictionary [s]"
+    };
+
+    let dictionary_indicator = Paragraph::new(dictionary_text)
+        .style(if app.filter.uses_solution_words_only() {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::Blue)
+        })
+        .alignment(Alignment::Center);
+
+    f.render_widget(dictionary_indicator, gauge_area);
+
+    let status_text = Paragraph::new(candidates_text)
         .style(Style::default().fg(Color::White))
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(status, chunks[1]);
+        .alignment(Alignment::Center);
+
+    let status_text_area = Rect {
+        x: inner_area.x,
+        y: inner_area.y + 1,
+        width: inner_area.width,
+        height: 1,
+    };
+
+    f.render_widget(status_text, status_text_area);
 
     // Main content area split into two columns
     let horizontal_chunks = Layout::default()
@@ -275,162 +370,359 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     // Left side: Current guess and feedback input
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+        .constraints([Constraint::Length(4), Constraint::Min(5)].as_ref())
         .split(horizontal_chunks[0]);
 
-    // Current guess display
-    let current_guess_text = match app.state {
-        AppState::Loading => {
-            format!(
-                "Calculating next guess {}...",
-                app.loading_frames[app.loading_idx]
-            )
-        }
-        _ => {
-            if app.filter.remaining_count() == 1 {
-                format!("Solved! The word is: {}", app.filter.remaining_words()[0])
-            } else if app.filter.remaining_count() == 0 {
-                "No words match the given constraints!".to_string()
-            } else {
-                format!("Current guess: {}", app.current_guess)
-            }
-        }
+    // Current guess display with very compact layout
+    let guess_block = Block::default().title("Guess").borders(Borders::ALL);
+    f.render_widget(guess_block.clone(), left_chunks[0]);
+
+    let inner_area = guess_block.inner(left_chunks[0]);
+
+    // Get the current guess text
+    let current_guess_text = if app.filter.remaining_count() == 1 {
+        app.filter.remaining_words()[0].to_string()
+    } else if app.filter.remaining_count() == 0 {
+        "?????".to_string()
+    } else {
+        app.current_guess.clone()
     };
-    let current_guess = Paragraph::new(current_guess_text)
-        .style(Style::default().fg(Color::Yellow))
-        .block(Block::default().title("Guess").borders(Borders::ALL));
-    f.render_widget(current_guess, left_chunks[0]);
 
-    // Feedback input area - shows differently based on state
-    let feedback_area = match app.state {
-        AppState::GettingFeedback => {
-            let mut lines = vec![Line::from("Enter feedback (G=Green, Y=Yellow, N=Gray):")];
+    // Create a 2x5 grid for guess and feedback
+    let cell_width: u16 = 3;
+    let cell_height: u16 = 1;
+    let grid_width = 5 * cell_width;
+    let grid_start_x = inner_area.x + (inner_area.width.saturating_sub(grid_width)) / 2;
+    let grid_start_y = inner_area.y;
 
-            // Show the current guess with the feedback input so far
-            let mut input_display = String::new();
-            for (i, c) in app.current_guess.chars().enumerate() {
-                if i < app.feedback_input.len() {
-                    match app.feedback_input.chars().nth(i).unwrap() {
-                        'G' => input_display.push_str(&format!("[{}:G] ", c)),
-                        'Y' => input_display.push_str(&format!("[{}:Y] ", c)),
-                        'N' => input_display.push_str(&format!("[{}:N] ", c)),
-                        _ => input_display.push_str(&format!("[{}:?] ", c)),
+    // Draw the current guess (top row)
+    for (i, c) in current_guess_text.chars().enumerate() {
+        let cell_x = grid_start_x + (i as u16 * cell_width);
+        let cell = Rect::new(cell_x, grid_start_y, cell_width, cell_height);
+        let char_style = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
+
+        let cell_text = Paragraph::new(c.to_string())
+            .style(char_style)
+            .alignment(Alignment::Center);
+
+        f.render_widget(cell_text, cell);
+    }
+
+    // If in loading state, show bouncing animation in the bottom row
+    if let AppState::Loading = app.state {
+        let loading_pos = app.loading_bar_pos.min(4);
+
+        for i in 0..5u16 {
+            let cell_x = grid_start_x + (i * cell_width);
+            let cell = Rect::new(cell_x, grid_start_y + 1, cell_width, cell_height);
+
+            let cell_text = if i as usize == loading_pos {
+                Paragraph::new("▓").style(Style::default().fg(Color::Yellow))
+            } else {
+                Paragraph::new("░").style(Style::default().fg(Color::DarkGray))
+            };
+
+            f.render_widget(cell_text.alignment(Alignment::Center), cell);
+        }
+    }
+    // Otherwise show feedback or empty slots in bottom row
+    else if !app.feedback_input.is_empty() {
+        for (i, c) in app.feedback_input.chars().enumerate() {
+            let cell_x = grid_start_x + (i as u16 * cell_width);
+            let cell = Rect::new(cell_x, grid_start_y + 1, cell_width, cell_height);
+
+            let (feedback_char, style) = match c {
+                'G' => ('G', Style::default().fg(Color::Green)),
+                'Y' => ('Y', Style::default().fg(Color::Yellow)),
+                'N' => ('N', Style::default().fg(Color::DarkGray)),
+                _ => ('?', Style::default().fg(Color::White)),
+            };
+
+            let cell_text = Paragraph::new(feedback_char.to_string())
+                .style(style)
+                .alignment(Alignment::Center);
+
+            f.render_widget(cell_text, cell);
+        }
+
+        // Draw empty slots for remaining positions
+        for i in app.feedback_input.len()..5 {
+            let cell_x = grid_start_x + (i as u16 * cell_width);
+            let cell = Rect::new(cell_x, grid_start_y + 1, cell_width, cell_height);
+
+            let cell_text = Paragraph::new("_")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center);
+
+            f.render_widget(cell_text, cell);
+        }
+    }
+
+    // Guess history display
+    let mut history_lines = Vec::new();
+    if app.history.is_empty() {
+        history_lines.push(Line::from("No guesses yet"));
+    } else {
+        for (turn, (guess, feedback)) in app.history.iter().enumerate() {
+            let mut line_spans = Vec::new();
+            line_spans.push(Span::styled(
+                format!("{}. ", turn + 1),
+                Style::default().fg(Color::White),
+            ));
+
+            // Add each letter with appropriate color based on feedback
+            for (i, c) in guess.chars().enumerate() {
+                let style = if i < feedback.len() {
+                    match feedback.chars().nth(i).unwrap() {
+                        'G' => Style::default().fg(Color::Green),
+                        'Y' => Style::default().fg(Color::Yellow),
+                        _ => Style::default().fg(Color::DarkGray),
                     }
                 } else {
-                    input_display.push_str(&format!("[{}:_] ", c));
-                }
+                    Style::default().fg(Color::White)
+                };
+                line_spans.push(Span::styled(c.to_string(), style));
             }
-            lines.push(Line::from(input_display));
-
-            // Instructions
-            lines.push(Line::from("Press Enter to submit, Esc to cancel"));
-
-            Paragraph::new(Text::from(lines))
-                .style(Style::default().fg(Color::Cyan))
-                .block(
-                    Block::default()
-                        .title("Enter Feedback")
-                        .borders(Borders::ALL),
-                )
+            history_lines.push(Line::from(line_spans));
         }
-        _ => {
-            let lines = vec![
-                Line::from("Press keys to:"),
-                Line::from("  [f] Enter feedback for current guess"),
-                Line::from("  [r] Reset the game"),
-                Line::from("  [s] Toggle solution words only"),
-                Line::from("  [q] Quit"),
-            ];
-            Paragraph::new(Text::from(lines))
-                .style(Style::default().fg(Color::White))
-                .block(Block::default().title("Controls").borders(Borders::ALL))
-        }
-    };
-    f.render_widget(feedback_area, left_chunks[1]);
+    }
 
+    let history_area = Paragraph::new(Text::from(history_lines))
+        .block(Block::default().title("History").borders(Borders::ALL));
+
+    f.render_widget(history_area, left_chunks[1]);
+
+    // Feedback input area - only shown when getting feedback
+    if let AppState::GettingFeedback = app.state {
+        let feedback_area_height = 6;
+        let feedback_area_width = 30;
+        let feedback_popup = Rect {
+            x: (size.width - feedback_area_width) / 2,
+            y: (size.height - feedback_area_height) / 2,
+            width: feedback_area_width,
+            height: feedback_area_height,
+        };
+
+        let mut lines = vec![Line::from("Enter feedback:")];
+
+        // Show the current guess with the feedback input so far
+        let mut input_display = String::new();
+        for (i, c) in app.current_guess.chars().enumerate() {
+            if i < app.feedback_input.len() {
+                match app.feedback_input.chars().nth(i).unwrap() {
+                    'G' => input_display.push_str(&format!("[{}:G] ", c)),
+                    'Y' => input_display.push_str(&format!("[{}:Y] ", c)),
+                    'N' => input_display.push_str(&format!("[{}:N] ", c)),
+                    _ => input_display.push_str(&format!("[{}:?] ", c)),
+                }
+            } else {
+                input_display.push_str(&format!("[{}:_] ", c));
+            }
+        }
+        lines.push(Line::from(input_display));
+
+        // Instructions
+        lines.push(Line::from("G=Green | Y=Yellow | N=Gray"));
+        lines.push(Line::from("Enter=Submit | Esc=Cancel"));
+
+        let popup = Paragraph::new(Text::from(lines))
+            .style(Style::default().fg(Color::Cyan))
+            .block(
+                Block::default()
+                    .title("Enter Feedback")
+                    .borders(Borders::ALL),
+            )
+            .alignment(Alignment::Center);
+
+        // Create a solid background for the popup to prevent text bleed-through
+        let background = Paragraph::new(
+            " ".repeat(feedback_popup.width as usize * feedback_popup.height as usize),
+        )
+        .style(Style::default().bg(Color::Black));
+
+        f.render_widget(background, feedback_popup);
+
+        // Then draw the popup with border on top
+        let popup_with_border = popup.block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+
+        f.render_widget(popup_with_border, feedback_popup);
+    }
     // Right side: Knowledge display and remaining words sample
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
         .split(horizontal_chunks[1]);
 
-    // Knowledge display
-    // TODO(ui): Implement a more visually pleasing way to display the knowledge
+    // Knowledge display - improved visual representation
     let info_set = app.filter.get_info();
-    let mut knowledge_items: Vec<ListItem> = Vec::new();
 
-    // Group infos by type for better visualization
-    let mut correct_info = vec![];
-    let mut not_at_info = vec![];
-    let mut not_in_word_info = vec![];
+    // Create a word outline with known/unknown letters
+    let mut known_letters = ['_'; 5];
+    let mut yellow_letters: Vec<(char, usize)> = Vec::new();
+    let mut not_in_word: Vec<char> = Vec::new();
 
     for info in info_set {
         match info {
-            Info::Correct(c, pos) => correct_info.push(format!("{}@{}", c, pos)),
-            Info::NotAt(c, pos) => not_at_info.push(format!("{}!@{}", c, pos)),
-            Info::Not(c) => not_in_word_info.push(format!("{}", c)),
+            Info::Correct(c, pos) => known_letters[*pos] = *c,
+            Info::NotAt(c, pos) => yellow_letters.push((*c, *pos)),
+            Info::Not(c) => not_in_word.push(*c),
         }
     }
 
-    if !correct_info.is_empty() {
-        knowledge_items.push(ListItem::new(Span::styled(
-            format!("Correct positions: {}", correct_info.join(", ")),
-            Style::default().fg(Color::Green),
-        )));
+    // Create a visual word outline
+    let word_outline = Line::from(vec![
+        Span::styled("Word: ", Style::default().fg(Color::White)),
+        Span::styled(
+            format!(
+                "[ {} ] ",
+                known_letters
+                    .iter()
+                    .map(|c| if *c == '_' { ' ' } else { *c })
+                    .collect::<String>()
+            ),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
+    // Create a keyboard-like visualization
+    let mut knowledge_text = vec![Line::from(""), Line::from(word_outline), Line::from("")];
+
+    // Add letters in word but wrong position
+    if !yellow_letters.is_empty() {
+        let mut in_word_chars = yellow_letters.iter().map(|(c, _)| *c).collect::<Vec<_>>();
+        in_word_chars.sort();
+        in_word_chars.dedup();
+
+        knowledge_text.push(Line::from(vec![
+            Span::styled("In word: ", Style::default().fg(Color::White)),
+            Span::styled(
+                in_word_chars.iter().collect::<String>(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
     }
 
-    if !not_at_info.is_empty() {
-        knowledge_items.push(ListItem::new(Span::styled(
-            format!("Wrong positions: {}", not_at_info.join(", ")),
-            Style::default().fg(Color::Yellow),
-        )));
+    // Add letters not in word
+    if !not_in_word.is_empty() {
+        let mut not_chars = not_in_word.clone();
+        not_chars.sort();
+        not_chars.dedup();
+
+        knowledge_text.push(Line::from(vec![
+            Span::styled("Not in word: ", Style::default().fg(Color::White)),
+            Span::styled(
+                not_chars.iter().collect::<String>(),
+                Style::default().fg(Color::Red),
+            ),
+        ]));
     }
 
-    if !not_in_word_info.is_empty() {
-        knowledge_items.push(ListItem::new(Span::styled(
-            format!("Not in word: {}", not_in_word_info.join(", ")),
-            Style::default().fg(Color::Red),
-        )));
+    // Create letter-by-letter position visualization
+    knowledge_text.push(Line::from(""));
+    knowledge_text.push(Line::from("Position knowledge:"));
+
+    for pos in 0..5 {
+        let mut position_spans = vec![Span::styled(
+            format!("Pos {}: ", pos + 1),
+            Style::default().fg(Color::White),
+        )];
+
+        // Check if we have a correct letter for this position
+        if known_letters[pos] != '_' {
+            position_spans.push(Span::styled(
+                format!("{}", known_letters[pos]),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        // Otherwise show letters that are known not to be in this position
+        else {
+            let not_at_pos: Vec<_> = yellow_letters
+                .iter()
+                .filter(|(_, p)| *p == pos)
+                .map(|(c, _)| *c)
+                .collect();
+
+            if !not_at_pos.is_empty() {
+                position_spans.push(Span::styled(
+                    format!("not {}", not_at_pos.iter().collect::<String>()),
+                    Style::default().fg(Color::Yellow),
+                ));
+            } else {
+                position_spans.push(Span::styled("?", Style::default().fg(Color::Gray)));
+            }
+        }
+
+        knowledge_text.push(Line::from(position_spans));
     }
 
-    if knowledge_items.is_empty() {
-        knowledge_items.push(ListItem::new("No knowledge yet"));
-    }
+    let knowledge_paragraph = Paragraph::new(knowledge_text)
+        .block(Block::default().title("Knowledge").borders(Borders::ALL));
 
-    let knowledge_list =
-        List::new(knowledge_items).block(Block::default().title("Knowledge").borders(Borders::ALL));
-    f.render_widget(knowledge_list, right_chunks[0]);
+    f.render_widget(knowledge_paragraph, right_chunks[0]);
 
     // Sample of remaining words
     let remaining_words = app.filter.remaining_words();
-    let sample_count = remaining_words.len().min(5);
-    let sample_text = if !remaining_words.is_empty() {
-        format!(
-            "Sample ({}): {}",
-            sample_count,
-            remaining_words[..sample_count].join(", ")
-        )
-    } else {
-        "No words match the criteria".to_string()
-    };
+    let sample_count = remaining_words.len().min(10);
 
-    let words_sample = Paragraph::new(sample_text)
+    let mut sample_text = Vec::new();
+
+    if !remaining_words.is_empty() {
+        let words_per_line = 5;
+        let lines_needed = (sample_count + words_per_line - 1) / words_per_line;
+
+        for i in 0..lines_needed {
+            let start = i * words_per_line;
+            let end = (start + words_per_line).min(sample_count);
+            sample_text.push(Line::from(remaining_words[start..end].join("  ")));
+        }
+
+        if remaining_words.len() > sample_count {
+            sample_text.push(Line::from(format!(
+                "+ {} more...",
+                remaining_words.len() - sample_count
+            )));
+        }
+    } else {
+        sample_text.push(Line::from("No words match the criteria"));
+    }
+
+    let words_sample = Paragraph::new(Text::from(sample_text))
         .block(
             Block::default()
-                .title("Remaining Words")
+                .title(format!("Candidates ({})", remaining_words.len()))
                 .borders(Borders::ALL),
         )
         .wrap(Wrap { trim: true });
     f.render_widget(words_sample, right_chunks[1]);
 
-    // Bottom status line or help text
-    let help_text = match app.state {
-        AppState::GettingFeedback => "Enter G (green), Y (yellow), or N (gray) for each letter",
-        _ => "Use the keyboard to navigate | See Controls panel for available commands",
+    // Bottom status line with help text or error message
+    let mut help_style = Style::default().fg(Color::Gray);
+    let help_text = if let Some(error) = &app.error_message {
+        help_style = Style::default().fg(Color::Red);
+        error.clone()
+    } else {
+        match app.state {
+            AppState::GettingFeedback => {
+                "G=green | Y=yellow | N=gray | Enter=submit | Esc=cancel".to_string()
+            }
+            _ => "f=feedback | r=reset | s=toggle solutions | q=quit".to_string(),
+        }
     };
 
     let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::Gray))
+        .style(help_style)
         .alignment(Alignment::Center)
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(help, chunks[3]);
