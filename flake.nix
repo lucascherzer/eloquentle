@@ -24,12 +24,15 @@
       in
       rec {
         # For `nix build` & `nix run`:
-        packages.default = naersk'.buildPackage {
+        defaultPackage = naersk'.buildPackage {
           src = ./.;
         };
-
-        # For backward compatibility
-        defaultPackage = packages.default;
+        packages.container = pkgs.dockerTools.buildLayeredImage {
+          name = "eloquentle";
+          config = {
+            Cmd = [ "${defaultPackage}/bin/eloquentle" ];
+          };
+        };
 
         # For `nix develop`:
         devShell = pkgs.mkShell {
@@ -39,20 +42,5 @@
           ];
         };
       }
-    )
-    // {
-      # Dedicated container output that will always build on x86_64-linux
-      packages.x86_64-linux.container =
-        let
-          linuxPkgs = import nixpkgs { system = "x86_64-linux"; };
-          linuxNaersk = linuxPkgs.callPackage naersk { };
-          linuxBinary = linuxNaersk.buildPackage { src = ./.; };
-        in
-        linuxPkgs.dockerTools.buildLayeredImage {
-          name = "eloquentle";
-          config = {
-            Cmd = [ "${linuxBinary}/bin/eloquentle" ];
-          };
-        };
-    };
+    );
 }
