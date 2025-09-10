@@ -32,6 +32,7 @@ struct App {
     state: AppState,
     filter: Filter,
     current_guess: String,
+    best_guess: String, // Added for tracking best guess in knowledge pane
     turn: usize,
     feedback_input: String,
     loading_idx: usize,
@@ -41,16 +42,19 @@ struct App {
     loading_last_update: Instant,
     error_message: Option<String>,
     error_time: Option<Instant>,
-    history: Vec<(String, String)>, // (guess, feedback)
+    history: Vec<(String, String, f64)>, // (guess, feedback, info_gain)
+    current_entropy: f64,
     quit: bool,
 }
 
 impl App {
     fn new() -> Self {
+        let first_guess = get_best_first_guess().to_string();
         Self {
             state: AppState::Running,
             filter: Filter::default(),
-            current_guess: get_best_first_guess().to_string(),
+            current_guess: first_guess.clone(),
+            best_guess: first_guess,
             turn: 1,
             feedback_input: String::new(),
             loading_idx: 0,
@@ -61,6 +65,7 @@ impl App {
             error_message: None,
             error_time: None,
             history: Vec::new(),
+            current_entropy: 5.87, // Hardcoded for first guess
             quit: false,
         }
     }
@@ -72,10 +77,14 @@ impl App {
         } else {
             self.filter = Filter::default();
         }
-        self.current_guess = get_best_first_guess().to_string();
+        let first_guess = get_best_first_guess().to_string();
+        self.current_guess = first_guess.clone();
+        self.best_guess = first_guess;
         self.turn = 1;
         self.feedback_input.clear();
         self.state = AppState::Running;
+        self.current_entropy = 5.87; // Hardcoded for first guess
+        self.history = Vec::new();
     }
 
     fn toggle_solution_words(&mut self) {
@@ -113,8 +122,11 @@ impl App {
         self.state = AppState::Loading;
 
         // Save the current guess and feedback to history
-        self.history
-            .push((self.current_guess.clone(), self.feedback_input.clone()));
+        self.history.push((
+            self.current_guess.clone(),
+            self.feedback_input.clone(),
+            self.current_entropy,
+        ));
 
         // Enter loading state to calculate the next guess
         self.state = AppState::Loading;
@@ -198,7 +210,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             if app.loading_idx == 3 {
                 // After a few frames of animation
                 if app.filter.remaining_count() > 1 {
-                    app.current_guess = app.filter.recommend_guess();
+                    let (guess, entropy) = app.filter.recommend_guess();
+                    app.current_guess = guess.clone();
+                    app.best_guess = guess;
+                    app.current_entropy = entropy;
                 }
                 app.state = AppState::Running;
             }
@@ -289,28 +304,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(title, chunks[0]);
 
-    // Add loading indicator to title bar if in loading state
-    if let AppState::Loading = app.state {
-        // Position the spinner in the top right corner of the title bar
-        let x = chunks[0].x + chunks[0].width - 4;
-        let y = chunks[0].y + 1;
-
-        // Render the loading spinner in the corner of the title bar
-        let spinner = Paragraph::new(app.loading_frames[app.loading_idx].to_string()).style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        );
-
-        f.render_widget(spinner, Rect::new(x, y, 1, 1));
-
-        // Also add "calculating..." text in the title area
-        let calc_text = Paragraph::new(" calculating...")
-            .style(Style::default().fg(Color::Yellow))
-            .alignment(Alignment::Right);
-
-        f.render_widget(calc_text, Rect::new(x - 14, y, 14, 1));
-    }
+    // Loading indicator moved to the Guess pane title
 
     // Status bar with remaining candidates and turn information
     let candidates_text = format!(
@@ -374,7 +368,29 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .split(horizontal_chunks[0]);
 
     // Current guess display with very compact layout
-    let guess_block = Block::default().title("Guess").borders(Borders::ALL);
+    // Build title with loading indicator if applicable
+    let mut guess_title = if let AppState::GettingFeedback = app.state {
+        String::from("Enter Feedback")
+    } else {
+        String::from("Guess")
+    };
+
+    // Add loading spinner to title if in loading state
+    if let AppState::Loading = app.state {
+        guess_title = format!("{} {}", guess_title, app.loading_frames[app.loading_idx]);
+    }
+
+    let guess_block = Block::default()
+        .title(guess_title)
+        .borders(Borders::ALL)
+        .border_style(if let AppState::GettingFeedback = app.state {
+            Style::default().fg(Color::Cyan)
+        } else if let AppState::Loading = app.state {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        });
+
     f.render_widget(guess_block.clone(), left_chunks[0]);
 
     let inner_area = guess_block.inner(left_chunks[0]);
@@ -460,12 +476,25 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         }
     }
 
+    // In feedback mode, show instruction line below the grid
+    if let AppState::GettingFeedback = app.state {
+        let instruction_y = grid_start_y + 2;
+        let instruction = Paragraph::new("G=Green | Y=Yellow | N=Gray")
+            .style(Style::default().fg(Color::Cyan))
+            .alignment(Alignment::Center);
+
+        f.render_widget(
+            instruction,
+            Rect::new(inner_area.x, instruction_y, inner_area.width, 1),
+        );
+    }
+
     // Guess history display
     let mut history_lines = Vec::new();
     if app.history.is_empty() {
         history_lines.push(Line::from("No guesses yet"));
     } else {
-        for (turn, (guess, feedback)) in app.history.iter().enumerate() {
+        for (turn, (guess, feedback, info_gain)) in app.history.iter().enumerate() {
             let mut line_spans = Vec::new();
             line_spans.push(Span::styled(
                 format!("{}. ", turn + 1),
@@ -485,6 +514,13 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 };
                 line_spans.push(Span::styled(c.to_string(), style));
             }
+
+            // Add info gain value
+            line_spans.push(Span::styled(
+                format!(" ({:.2})", info_gain),
+                Style::default().fg(Color::Cyan),
+            ));
+
             history_lines.push(Line::from(line_spans));
         }
     }
@@ -494,65 +530,8 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     f.render_widget(history_area, left_chunks[1]);
 
-    // Feedback input area - only shown when getting feedback
-    if let AppState::GettingFeedback = app.state {
-        let feedback_area_height = 6;
-        let feedback_area_width = 30;
-        let feedback_popup = Rect {
-            x: (size.width - feedback_area_width) / 2,
-            y: (size.height - feedback_area_height) / 2,
-            width: feedback_area_width,
-            height: feedback_area_height,
-        };
-
-        let mut lines = vec![Line::from("Enter feedback:")];
-
-        // Show the current guess with the feedback input so far
-        let mut input_display = String::new();
-        for (i, c) in app.current_guess.chars().enumerate() {
-            if i < app.feedback_input.len() {
-                match app.feedback_input.chars().nth(i).unwrap() {
-                    'G' => input_display.push_str(&format!("[{}:G] ", c)),
-                    'Y' => input_display.push_str(&format!("[{}:Y] ", c)),
-                    'N' => input_display.push_str(&format!("[{}:N] ", c)),
-                    _ => input_display.push_str(&format!("[{}:?] ", c)),
-                }
-            } else {
-                input_display.push_str(&format!("[{}:_] ", c));
-            }
-        }
-        lines.push(Line::from(input_display));
-
-        // Instructions
-        lines.push(Line::from("G=Green | Y=Yellow | N=Gray"));
-        lines.push(Line::from("Enter=Submit | Esc=Cancel"));
-
-        let popup = Paragraph::new(Text::from(lines))
-            .style(Style::default().fg(Color::Cyan))
-            .block(
-                Block::default()
-                    .title("Enter Feedback")
-                    .borders(Borders::ALL),
-            )
-            .alignment(Alignment::Center);
-
-        // Create a solid background for the popup to prevent text bleed-through
-        let background = Paragraph::new(
-            " ".repeat(feedback_popup.width as usize * feedback_popup.height as usize),
-        )
-        .style(Style::default().bg(Color::Black));
-
-        f.render_widget(background, feedback_popup);
-
-        // Then draw the popup with border on top
-        let popup_with_border = popup.block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        );
-
-        f.render_widget(popup_with_border, feedback_popup);
-    }
+    // When getting feedback, we enhance the instructions in the bottom help area
+    // but we don't show a floating popup anymore - all feedback is handled inline
     // Right side: Knowledge display and remaining words sample
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -575,6 +554,21 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         }
     }
 
+    // Show current recommendation with entropy
+    let recommendation = Line::from(vec![
+        Span::styled("Best guess: ", Style::default().fg(Color::White)),
+        Span::styled(
+            app.best_guess.clone(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" (info gain: {:.2})", app.current_entropy),
+            Style::default().fg(Color::White),
+        ),
+    ]);
+
     // Create a visual word outline
     let word_outline = Line::from(vec![
         Span::styled("Word: ", Style::default().fg(Color::White)),
@@ -593,7 +587,13 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     ]);
 
     // Create a keyboard-like visualization
-    let mut knowledge_text = vec![Line::from(""), Line::from(word_outline), Line::from("")];
+    let mut knowledge_text = vec![
+        Line::from(""),
+        Line::from(recommendation),
+        Line::from(""),
+        Line::from(word_outline),
+        Line::from(""),
+    ];
 
     // Add letters in word but wrong position
     if !yellow_letters.is_empty() {
@@ -717,7 +717,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             AppState::GettingFeedback => {
                 "G=green | Y=yellow | N=gray | Enter=submit | Esc=cancel".to_string()
             }
-            _ => "f=feedback | r=reset | s=toggle solutions | q=quit".to_string(),
+            _ => "f=enter feedback | r=reset | s=toggle solutions | q=quit".to_string(),
         }
     };
 

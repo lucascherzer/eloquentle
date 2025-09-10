@@ -115,7 +115,7 @@ impl Filter {
     /// arbitrary).
     ///
     /// By default, this only considers words from the remaining candidates.
-    pub fn recommend_guess(&self) -> String {
+    pub fn recommend_guess(&self) -> (String, f64) {
         // If we're at the start with all words, use the precomputed best guess
         if self.words.len()
             == (if self.use_solution_words_only {
@@ -124,12 +124,12 @@ impl Filter {
                 WORDS.len()
             })
         {
-            return get_best_first_guess().to_string();
+            return (get_best_first_guess().to_string(), 5.87); // Hardcoded entropy for first guess
         }
 
         // If only one word remains, return it immediately
         if self.words.len() == 1 {
-            return self.words[0].to_string();
+            return (self.words[0].to_string(), 0.0);
         }
 
         // Always consider the full dictionary to find words that can efficiently
@@ -143,12 +143,14 @@ impl Filter {
     /// If `use_full_dictionary` is true, it will consider all words in the
     /// dictionary, not just the remaining candidates. This can be better early
     /// in the game when you want to maximize information gain.
-    pub fn recommend_guess_from_candidates(&self) -> String {
+    pub fn recommend_guess_from_candidates(&self) -> (String, f64) {
         if self.words.len() <= 1 {
-            return self
-                .words
-                .first()
-                .map_or(String::from(""), |w| w.to_string());
+            return (
+                self.words
+                    .first()
+                    .map_or(String::from(""), |w| w.to_string()),
+                0.0,
+            );
         }
 
         // Always use the full dictionary for guesses to maximize information gain
@@ -170,7 +172,7 @@ impl Filter {
             }
         }
 
-        best_guess
+        (best_guess, best_score)
     }
 
     /// Calculates the entropy (information gain) for a potential guess.
@@ -293,9 +295,9 @@ impl Filter {
 impl Default for Filter {
     fn default() -> Self {
         Filter {
-            words: get_rc_words(),
+            words: get_rc_solution_words(),
             info: HashSet::new(),
-            use_solution_words_only: false,
+            use_solution_words_only: true,
         }
     }
 }
