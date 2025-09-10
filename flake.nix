@@ -7,6 +7,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    fenix = {
+      url = "github:nix-community/fenix/";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
