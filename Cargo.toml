@@ -9,7 +9,7 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "eloquentle"
-path = "bin/eloquentle.rs"
+path = "src/bin/eloquentle.rs"
 
 [dependencies]
 ratatui = "0.24.0"
