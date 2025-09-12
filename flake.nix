@@ -7,10 +7,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    fenix = {
-      url = "github:nix-community/fenix/";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # fenix = {
+    #   url = "github:nix-community/fenix/";
+    #   inputs.nixpkgs.follows = "nixpkgs";
+    # };
   };
 
   outputs =
@@ -19,6 +19,7 @@
       flake-utils,
       naersk,
       nixpkgs,
+    # fenix,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -38,9 +39,14 @@
 
         # For `nix develop`:
         devShell = pkgs.mkShell {
+          DIRENV_LOG_FORMAT = "";
+          shellHook = ''
+            echo "Entering devshell"
+          '';
           nativeBuildInputs = with pkgs; [
             rustc
             cargo
+            nushell
           ];
         };
       }
@@ -62,7 +68,6 @@
         in
         linuxPkgs.dockerTools.buildLayeredImage {
           name = "eloquentle";
-          tag = "latest";
 
           # Only include the binary and necessary runtime files
           contents = [
@@ -72,9 +77,6 @@
               cp ${linuxBinary}/bin/eloquentle $out/bin/
               chmod +x $out/bin/eloquentle
             '')
-
-            # Include SSL certificates for HTTPS support if needed
-            linuxPkgs.cacert
           ];
 
           config = {
