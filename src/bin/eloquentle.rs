@@ -1,19 +1,19 @@
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use eloquentle::{
-    filter::{Filter, get_best_first_guess},
+    filter::{get_best_first_guess, Filter},
     info::Info,
 };
 use ratatui::{
-    Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
+    Terminal,
 };
 use std::{
     collections::HashSet,
@@ -26,6 +26,9 @@ enum AppState {
     Running,
     GettingFeedback,
     Loading,
+    ManualKnowledgeMenu,
+    ManualDirect,
+    ManualIndirect,
 }
 
 struct App {
@@ -45,6 +48,11 @@ struct App {
     history: Vec<(String, String, f64)>, // (guess, feedback, info_gain)
     current_entropy: f64,
     quit: bool,
+    // Manual knowledge entry fields
+    manual_input_buffer: String,
+    manual_word: String,
+    manual_feedback: String,
+    manual_mode_step: usize, // 0 = word input, 1 = feedback input
 }
 
 impl App {
@@ -67,6 +75,10 @@ impl App {
             history: Vec::new(),
             current_entropy: 5.87, // Hardcoded for first guess
             quit: false,
+            manual_input_buffer: String::new(),
+            manual_word: String::new(),
+            manual_feedback: String::new(),
+            manual_mode_step: 0,
         }
     }
 
@@ -187,6 +199,186 @@ fn process_feedback(guess: &str, feedback: &str) -> Result<HashSet<Info>, String
     Ok(info_set)
 }
 
+/// Parse direct Info input from string format
+/// Supports formats:
+/// - Not(x) or x@- or -x
+/// - Correct(a, 2) or a@2
+/// - NotAt(b, 3) or b!@3
+/// Positions are 1-indexed for user input (converted to 0-indexed internally)
+fn parse_info_string(input: &str) -> Result<HashSet<Info>, String> {
+    let mut info_set = HashSet::new();
+
+    // Split by comma but be smart about it - only split outside parentheses
+    let entries = split_by_comma_outside_parens(input);
+
+    for entry in entries {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+
+        // Try to parse different formats
+        let info = if let Some(parsed) = parse_not_format(entry) {
+            parsed
+        } else if let Some(parsed) = parse_correct_format(entry) {
+            parsed
+        } else if let Some(parsed) = parse_notat_format(entry) {
+            parsed
+        } else if let Some(parsed) = parse_shorthand_format(entry) {
+            parsed
+        } else {
+            return Err(format!(
+                "Invalid format: '{}'. Expected: Not(x), Correct(a, 2), NotAt(b, 3), a@2, b!@3, or -x",
+                entry
+            ));
+        };
+
+        info_set.insert(info);
+    }
+
+    if info_set.is_empty() {
+        return Err("No valid Info entries found".to_string());
+    }
+
+    Ok(info_set)
+}
+
+fn split_by_comma_outside_parens(s: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut paren_depth = 0;
+
+    for c in s.chars() {
+        match c {
+            '(' => {
+                paren_depth += 1;
+                current.push(c);
+            }
+            ')' => {
+                paren_depth -= 1;
+                current.push(c);
+            }
+            ',' if paren_depth == 0 => {
+                if !current.trim().is_empty() {
+                    result.push(current.trim().to_string());
+                }
+                current.clear();
+            }
+            _ => {
+                current.push(c);
+            }
+        }
+    }
+
+    if !current.trim().is_empty() {
+        result.push(current.trim().to_string());
+    }
+
+    result
+}
+
+fn parse_not_format(s: &str) -> Option<Info> {
+    // Match: Not(x) or not(x) or -x
+    if s.starts_with('-') && s.len() == 2 {
+        let c = s.chars().nth(1)?;
+        if c.is_ascii_lowercase() {
+            return Some(Info::Not(c));
+        }
+    }
+
+    let s_lower = s.to_lowercase();
+    if s_lower.starts_with("not(") && s_lower.ends_with(')') {
+        let inner = &s[4..s.len() - 1].trim();
+        if inner.len() == 1 {
+            let c = inner.chars().next()?;
+            if c.is_ascii_lowercase() {
+                return Some(Info::Not(c));
+            }
+        }
+    }
+    None
+}
+
+fn parse_correct_format(s: &str) -> Option<Info> {
+    // Match: Correct(a, 2) or correct(a, 2) or a@2
+    if let Some(_at_pos) = s.find('@') {
+        if !s.contains('!') {
+            let parts: Vec<&str> = s.split('@').collect();
+            if parts.len() == 2 {
+                let c = parts[0].trim();
+                let pos_str = parts[1].trim();
+                if c.len() == 1 && c.chars().next()?.is_ascii_lowercase() {
+                    if let Ok(pos) = pos_str.parse::<usize>() {
+                        if pos >= 1 && pos <= 5 {
+                            return Some(Info::Correct(c.chars().next()?, pos - 1));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let s_lower = s.to_lowercase();
+    if s_lower.starts_with("correct(") && s_lower.ends_with(')') {
+        let inner = &s[8..s.len() - 1];
+        let parts: Vec<&str> = inner.split(',').collect();
+        if parts.len() == 2 {
+            let c = parts[0].trim();
+            let pos_str = parts[1].trim();
+            if c.len() == 1 && c.chars().next()?.is_ascii_lowercase() {
+                if let Ok(pos) = pos_str.parse::<usize>() {
+                    if pos >= 1 && pos <= 5 {
+                        return Some(Info::Correct(c.chars().next()?, pos - 1));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_notat_format(s: &str) -> Option<Info> {
+    // Match: NotAt(b, 3) or notat(b, 3) or b!@3
+    if s.contains("!@") {
+        let parts: Vec<&str> = s.split("!@").collect();
+        if parts.len() == 2 {
+            let c = parts[0].trim();
+            let pos_str = parts[1].trim();
+            if c.len() == 1 && c.chars().next()?.is_ascii_lowercase() {
+                if let Ok(pos) = pos_str.parse::<usize>() {
+                    if pos >= 1 && pos <= 5 {
+                        return Some(Info::NotAt(c.chars().next()?, pos - 1));
+                    }
+                }
+            }
+        }
+    }
+
+    let s_lower = s.to_lowercase();
+    if s_lower.starts_with("notat(") && s_lower.ends_with(')') {
+        let inner = &s[6..s.len() - 1];
+        let parts: Vec<&str> = inner.split(',').collect();
+        if parts.len() == 2 {
+            let c = parts[0].trim();
+            let pos_str = parts[1].trim();
+            if c.len() == 1 && c.chars().next()?.is_ascii_lowercase() {
+                if let Ok(pos) = pos_str.parse::<usize>() {
+                    if pos >= 1 && pos <= 5 {
+                        return Some(Info::NotAt(c.chars().next()?, pos - 1));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_shorthand_format(_s: &str) -> Option<Info> {
+    // Additional shorthand that might be intuitive
+    // Already handled in other functions, but this is a catch-all
+    None
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     // Setup terminal
     enable_raw_mode()?;
@@ -232,6 +424,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             KeyCode::Char('r') => app.reset(),
                             KeyCode::Char('s') => app.toggle_solution_words(),
                             KeyCode::Char('f') => app.state = AppState::GettingFeedback,
+                            KeyCode::Char('m') => app.state = AppState::ManualKnowledgeMenu,
                             _ => {}
                         },
                         AppState::GettingFeedback => match key.code {
@@ -250,6 +443,131 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                             KeyCode::Esc => {
                                 app.feedback_input.clear();
+                                app.state = AppState::Running;
+                            }
+                            _ => {}
+                        },
+                        AppState::ManualKnowledgeMenu => match key.code {
+                            KeyCode::Char('1') => {
+                                app.manual_input_buffer.clear();
+                                app.state = AppState::ManualDirect;
+                            }
+                            KeyCode::Char('2') => {
+                                app.manual_word.clear();
+                                app.manual_feedback.clear();
+                                app.manual_mode_step = 0;
+                                app.state = AppState::ManualIndirect;
+                            }
+                            KeyCode::Esc => {
+                                app.state = AppState::Running;
+                            }
+                            _ => {}
+                        },
+                        AppState::ManualDirect => match key.code {
+                            KeyCode::Char(c) => {
+                                // Accept letters, numbers, special chars for Info syntax
+                                if c.is_ascii_alphanumeric() || "(),@!- ".contains(c) {
+                                    app.manual_input_buffer.push(c);
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                app.manual_input_buffer.pop();
+                            }
+                            KeyCode::Enter => match parse_info_string(&app.manual_input_buffer) {
+                                Ok(info_set) => {
+                                    let count = info_set.len();
+                                    app.filter.add_info_set(&info_set);
+                                    app.show_error(format!("Added {} pieces of knowledge", count));
+                                    app.manual_input_buffer.clear();
+                                    // Trigger recommendation recomputation
+                                    app.loading_idx = 0;
+                                    app.state = AppState::Loading;
+                                }
+                                Err(e) => {
+                                    app.show_error(e);
+                                }
+                            },
+                            KeyCode::Esc => {
+                                app.manual_input_buffer.clear();
+                                app.state = AppState::Running;
+                            }
+                            _ => {}
+                        },
+                        AppState::ManualIndirect => match key.code {
+                            KeyCode::Char(c) => {
+                                if app.manual_mode_step == 0 {
+                                    // Step 1: collecting word
+                                    if c.is_ascii_lowercase() && app.manual_word.len() < 5 {
+                                        app.manual_word.push(c);
+                                    }
+                                } else {
+                                    // Step 2: collecting feedback
+                                    if "GYNgyn".contains(c) && app.manual_feedback.len() < 5 {
+                                        app.manual_feedback.push(c.to_ascii_uppercase());
+                                    }
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                if app.manual_mode_step == 0 {
+                                    app.manual_word.pop();
+                                } else {
+                                    app.manual_feedback.pop();
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if app.manual_mode_step == 0 {
+                                    // Move to step 2 if word is valid
+                                    if app.manual_word.len() == 5 {
+                                        app.manual_mode_step = 1;
+                                    } else {
+                                        app.show_error(
+                                            "Word must be exactly 5 letters".to_string(),
+                                        );
+                                    }
+                                } else {
+                                    // Submit feedback
+                                    if app.manual_feedback.len() == 5 {
+                                        match process_feedback(
+                                            &app.manual_word,
+                                            &app.manual_feedback,
+                                        ) {
+                                            Ok(info_set) => {
+                                                let count = info_set.len();
+                                                app.filter.add_info_set(&info_set);
+
+                                                // Add to history
+                                                app.history.push((
+                                                    app.manual_word.clone(),
+                                                    app.manual_feedback.clone(),
+                                                    0.0, // No entropy for manual entries
+                                                ));
+
+                                                app.show_error(format!(
+                                                    "Added {} pieces of knowledge",
+                                                    count
+                                                ));
+                                                app.manual_word.clear();
+                                                app.manual_feedback.clear();
+                                                app.manual_mode_step = 0;
+                                                // Trigger recommendation recomputation
+                                                app.loading_idx = 0;
+                                                app.state = AppState::Loading;
+                                            }
+                                            Err(e) => {
+                                                app.show_error(e);
+                                            }
+                                        }
+                                    } else {
+                                        app.show_error(
+                                            "Feedback must be exactly 5 characters".to_string(),
+                                        );
+                                    }
+                                }
+                            }
+                            KeyCode::Esc => {
+                                app.manual_word.clear();
+                                app.manual_feedback.clear();
+                                app.manual_mode_step = 0;
                                 app.state = AppState::Running;
                             }
                             _ => {}
@@ -717,7 +1035,21 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
             AppState::GettingFeedback => {
                 "G=green | Y=yellow | N=gray | Enter=submit | Esc=cancel".to_string()
             }
-            _ => "f=enter feedback | r=reset | s=toggle solutions | q=quit".to_string(),
+            AppState::ManualKnowledgeMenu => {
+                "1=direct input | 2=word+feedback | Esc=cancel".to_string()
+            }
+            AppState::ManualDirect => {
+                "Enter Info (e.g., Not(x), a@2, b!@3) | Enter=submit | Esc=cancel".to_string()
+            }
+            AppState::ManualIndirect => {
+                if app.manual_mode_step == 0 {
+                    "Enter word (5 letters) | Enter=continue | Esc=cancel".to_string()
+                } else {
+                    "G=green | Y=yellow | N=gray | Enter=submit | Esc=cancel".to_string()
+                }
+            }
+            _ => "f=enter feedback | m=manual knowledge | r=reset | s=toggle solutions | q=quit"
+                .to_string(),
         }
     };
 
@@ -726,4 +1058,354 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .alignment(Alignment::Center)
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(help, chunks[3]);
+
+    // Render manual entry overlays
+    match app.state {
+        AppState::ManualKnowledgeMenu => {
+            render_manual_menu(f, chunks[2]);
+        }
+        AppState::ManualDirect => {
+            render_manual_direct(f, chunks[2], app);
+        }
+        AppState::ManualIndirect => {
+            render_manual_indirect(f, chunks[2], app);
+        }
+        _ => {}
+    }
+}
+
+fn render_manual_menu(f: &mut ratatui::Frame, area: Rect) {
+    // Create centered popup - larger to show all content
+    let popup_area = centered_rect(70, 60, area);
+
+    let menu_text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Manual Knowledge Entry",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Choose an input mode:"),
+        Line::from(""),
+        Line::from("  1. Direct input"),
+        Line::from("     Format: Not(x), Correct(a, 2), NotAt(b, 3)"),
+        Line::from("     Shorthand: -x, a@2, b!@3"),
+        Line::from(""),
+        Line::from("  2. Word + feedback pattern"),
+        Line::from("     Enter a word, then G/Y/N feedback"),
+        Line::from(""),
+    ];
+
+    let menu = Paragraph::new(menu_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+    f.render_widget(menu, popup_area);
+}
+
+fn render_manual_direct(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    let popup_area = centered_rect(80, 50, area);
+
+    let text_lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Direct Knowledge Entry",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("Enter Info (comma-separated for multiple):"),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("> {}", app.manual_input_buffer),
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(""),
+        Line::from("Examples:"),
+        Line::from("  Not(x) or -x          - Letter x not in word"),
+        Line::from("  Correct(a, 2) or a@2  - Letter a at position 2"),
+        Line::from("  NotAt(b, 3) or b!@3   - Letter b in word but not at position 3"),
+        Line::from(""),
+        Line::from("Multiple: Not(x), a@2, b!@3"),
+    ];
+
+    let direct = Paragraph::new(text_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+    f.render_widget(direct, popup_area);
+}
+
+fn render_manual_indirect(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    let popup_area = centered_rect(70, 35, area);
+
+    let text_lines = if app.manual_mode_step == 0 {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "Word + Feedback Entry (Step 1/2)",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("Enter the word that was guessed:"),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("> {}", app.manual_word),
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(""),
+            Line::from("(5 lowercase letters)"),
+        ]
+    } else {
+        // Build feedback display
+        let mut feedback_spans = vec![Span::raw("> ")];
+        for (i, fb_char) in app.manual_feedback.chars().enumerate() {
+            let color = match fb_char {
+                'G' => Color::Green,
+                'Y' => Color::Yellow,
+                'N' => Color::Gray,
+                _ => Color::White,
+            };
+
+            let word_char = app.manual_word.chars().nth(i).unwrap_or(' ');
+            feedback_spans.push(Span::styled(
+                format!("{} ", word_char.to_uppercase()),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        // Add placeholders for remaining positions
+        for i in app.manual_feedback.len()..5 {
+            let word_char = app.manual_word.chars().nth(i).unwrap_or('_');
+            feedback_spans.push(Span::raw(format!("{} ", word_char)));
+        }
+
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "Word + Feedback Entry (Step 2/2)",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(format!("Word: {}", app.manual_word.to_uppercase())),
+            Line::from(""),
+            Line::from("Enter feedback (G=Green, Y=Yellow, N=Gray):"),
+            Line::from(""),
+            Line::from(feedback_spans),
+        ]
+    };
+
+    let indirect = Paragraph::new(text_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+    f.render_widget(indirect, popup_area);
+}
+
+/// Helper function to create a centered rectangle
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_not_format() {
+        let result = parse_info_string("Not(x)").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::Not('x')));
+
+        let result = parse_info_string("not(y)").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::Not('y')));
+
+        let result = parse_info_string("-z").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::Not('z')));
+    }
+
+    #[test]
+    fn test_parse_correct_format() {
+        let result = parse_info_string("Correct(a, 2)").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::Correct('a', 1))); // 1-indexed to 0-indexed
+
+        let result = parse_info_string("correct(b, 5)").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::Correct('b', 4)));
+
+        let result = parse_info_string("a@2").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::Correct('a', 1)));
+
+        let result = parse_info_string("c@1").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::Correct('c', 0)));
+    }
+
+    #[test]
+    fn test_parse_notat_format() {
+        let result = parse_info_string("NotAt(b, 3)").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::NotAt('b', 2)));
+
+        let result = parse_info_string("notat(c, 1)").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::NotAt('c', 0)));
+
+        let result = parse_info_string("b!@3").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::NotAt('b', 2)));
+
+        let result = parse_info_string("d!@5").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::NotAt('d', 4)));
+    }
+
+    #[test]
+    fn test_parse_multiple_entries() {
+        let result = parse_info_string("Not(x), Correct(a, 2), NotAt(b, 3)").unwrap();
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&Info::Not('x')));
+        assert!(result.contains(&Info::Correct('a', 1)));
+        assert!(result.contains(&Info::NotAt('b', 2)));
+
+        let result = parse_info_string("-x, a@2, b!@3").unwrap();
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&Info::Not('x')));
+        assert!(result.contains(&Info::Correct('a', 1)));
+        assert!(result.contains(&Info::NotAt('b', 2)));
+    }
+
+    #[test]
+    fn test_parse_mixed_formats() {
+        let result = parse_info_string("Not(x), a@2, b!@3").unwrap();
+        assert_eq!(result.len(), 3);
+
+        let result = parse_info_string("-x, Correct(a, 2), b!@3").unwrap();
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_with_whitespace() {
+        let result = parse_info_string("  Not(x)  ,  a@2  ,  b!@3  ").unwrap();
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&Info::Not('x')));
+        assert!(result.contains(&Info::Correct('a', 1)));
+        assert!(result.contains(&Info::NotAt('b', 2)));
+    }
+
+    #[test]
+    fn test_parse_invalid_position() {
+        assert!(parse_info_string("Correct(a, 0)").is_err());
+        assert!(parse_info_string("Correct(a, 6)").is_err());
+        assert!(parse_info_string("a@0").is_err());
+        assert!(parse_info_string("a@6").is_err());
+    }
+
+    #[test]
+    fn test_parse_invalid_format() {
+        assert!(parse_info_string("InvalidFormat").is_err());
+        assert!(parse_info_string("Not()").is_err());
+        assert!(parse_info_string("Correct(a)").is_err());
+        assert!(parse_info_string("NotAt(b)").is_err());
+    }
+
+    #[test]
+    fn test_parse_empty_string() {
+        assert!(parse_info_string("").is_err());
+        assert!(parse_info_string("   ").is_err());
+    }
+
+    #[test]
+    fn test_parse_deduplication() {
+        // HashSet should deduplicate identical entries
+        let result = parse_info_string("Not(x), Not(x), Not(x)").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Info::Not('x')));
+    }
+
+    #[test]
+    fn test_split_by_comma_outside_parens() {
+        let result = split_by_comma_outside_parens("Not(x), Correct(a, 2), NotAt(b, 3)");
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], "Not(x)");
+        assert_eq!(result[1], "Correct(a, 2)");
+        assert_eq!(result[2], "NotAt(b, 3)");
+
+        let result = split_by_comma_outside_parens("a@2,b!@3,-x");
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], "a@2");
+        assert_eq!(result[1], "b!@3");
+        assert_eq!(result[2], "-x");
+    }
+
+    #[test]
+    fn test_process_feedback_basic() {
+        let result = process_feedback("raise", "GYYNG").unwrap();
+        assert!(result.contains(&Info::Correct('r', 0)));
+        assert!(result.contains(&Info::NotAt('a', 1)));
+        assert!(result.contains(&Info::NotAt('i', 2)));
+        assert!(result.contains(&Info::Correct('e', 4)));
+    }
+
+    #[test]
+    fn test_process_feedback_duplicate_letters() {
+        // If a letter appears twice and one is N, we shouldn't add Not(letter)
+        // if the other occurrence is G or Y
+        let result = process_feedback("abort", "NGGNN").unwrap();
+        // 'a' at position 0 is gray, but no other 'a'
+        assert!(result.contains(&Info::Not('a')));
+        // 'b' at position 1 is green
+        assert!(result.contains(&Info::Correct('b', 1)));
+        // 'o' at position 2 is green
+        assert!(result.contains(&Info::Correct('o', 2)));
+        // 'r' at position 3 is gray
+        assert!(result.contains(&Info::Not('r')));
+        // 't' at position 4 is gray
+        assert!(result.contains(&Info::Not('t')));
+    }
 }
