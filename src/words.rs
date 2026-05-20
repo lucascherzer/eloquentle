@@ -1,6 +1,4 @@
-use std::rc::Rc;
-
-pub const WORDS: [&'static str; 12972] = [
+pub static WORDS: [&str; 12972] = [
     "aahed", "aalii", "aargh", "aarti", "abaca", "abaci", "aback", "abacs", "abaft", "abaka",
     "abamp", "aband", "abase", "abash", "abask", "abate", "abaya", "abbas", "abbed", "abbes",
     "abbey", "abbot", "abcee", "abeam", "abear", "abele", "abers", "abets", "abhor", "abide",
@@ -1301,7 +1299,7 @@ pub const WORDS: [&'static str; 12972] = [
     "zymes", "zymic",
 ];
 
-pub const SOLUTION_WORDS: [&str; 2315] = [
+pub static SOLUTION_WORDS: [&str; 2315] = [
     "aback", "abase", "abate", "abbey", "abbot", "abhor", "abide", "abled", "abode", "abort",
     "about", "above", "abuse", "abyss", "acorn", "acrid", "actor", "acute", "adage", "adapt",
     "adept", "admin", "admit", "adobe", "adopt", "adore", "adorn", "adult", "affix", "afire",
@@ -1536,11 +1534,11 @@ pub const SOLUTION_WORDS: [&str; 2315] = [
     "young", "youth", "zebra", "zesty", "zonal",
 ];
 
-pub fn get_rc_words() -> Vec<Rc<&'static str>> {
-    WORDS.iter().map(|i| Rc::new(*i)).collect()
+pub fn get_rc_words() -> Vec<&'static str> {
+    WORDS.to_vec()
 }
 
 /// Returns a vector of Rc references to the solution words
-pub fn get_rc_solution_words() -> Vec<Rc<&'static str>> {
-    SOLUTION_WORDS.iter().map(|i| Rc::new(*i)).collect()
+pub fn get_rc_solution_words() -> Vec<&'static str> {
+    SOLUTION_WORDS.to_vec()
 }

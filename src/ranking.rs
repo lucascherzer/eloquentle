@@ -7,14 +7,13 @@
 use crate::filter::{Feedback, Pattern};
 use crate::info::Info;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
 /// A trait for word ranking strategies
 pub trait RankingStrategy {
     /// Ranks all possible guesses and returns them in order from best to worst
     fn rank_words<'a>(
         &self,
-        candidates: &[Rc<&'static str>],
+        candidates: &[&'static str],
         possible_guesses: &[&'a str],
     ) -> Vec<&'a str>;
 }
@@ -25,12 +24,12 @@ pub struct LetterFrequencyStrategy;
 impl RankingStrategy for LetterFrequencyStrategy {
     fn rank_words<'a>(
         &self,
-        candidates: &[Rc<&'static str>],
+        candidates: &[&'static str],
         possible_guesses: &[&'a str],
     ) -> Vec<&'a str> {
         // If there are 3 or fewer candidates, just return them
-        if candidates.len() <= 3 && candidates.len() > 0 {
-            return candidates.iter().map(|rc| **rc).collect();
+        if candidates.len() <= 3 && !candidates.is_empty() {
+            return candidates.to_vec();
         }
 
         // Count letter frequencies by position
@@ -62,10 +61,10 @@ impl RankingStrategy for LetterFrequencyStrategy {
                     }
 
                     // Add overall frequency score (only for unique letters to avoid double counting)
-                    if seen.insert(ch) {
-                        if let Some(freq) = letter_frequency.get(&ch) {
-                            score += freq;
-                        }
+                    if seen.insert(ch)
+                        && let Some(freq) = letter_frequency.get(&ch)
+                    {
+                        score += freq;
                     }
                 }
 
@@ -86,7 +85,8 @@ pub struct EntropyStrategy;
 
 impl EntropyStrategy {
     /// Calculates the entropy score for a word
-    fn calculate_entropy(&self, candidates: &[Rc<&'static str>], guess: &str) -> f64 {
+    #[allow(dead_code)]
+    fn calculate_entropy(&self, candidates: &[&'static str], guess: &str) -> f64 {
         if candidates.len() <= 1 {
             return 0.0;
         }
@@ -161,6 +161,7 @@ impl EntropyStrategy {
     }
 
     /// Calculates the feedback as a set of Info for a guess against a candidate
+    #[allow(dead_code)]
     fn calculate_info(&self, guess: &str, candidate: &str) -> HashSet<Info> {
         let pattern = self.calculate_pattern(guess, candidate);
         let guess_chars: Vec<char> = guess.chars().collect();
@@ -197,12 +198,12 @@ impl EntropyStrategy {
 impl RankingStrategy for EntropyStrategy {
     fn rank_words<'a>(
         &self,
-        candidates: &[Rc<&'static str>],
+        candidates: &[&'static str],
         possible_guesses: &[&'a str],
     ) -> Vec<&'a str> {
         // If there are very few candidates, just return them
-        if candidates.len() <= 3 && candidates.len() > 0 {
-            return candidates.iter().map(|rc| **rc).collect();
+        if candidates.len() <= 3 && !candidates.is_empty() {
+            return candidates.to_vec();
         }
 
         // Limit the number of candidates to evaluate for performance reasons
@@ -266,7 +267,7 @@ impl Default for HybridStrategy {
 impl RankingStrategy for HybridStrategy {
     fn rank_words<'a>(
         &self,
-        candidates: &[Rc<&'static str>],
+        candidates: &[&'static str],
         possible_guesses: &[&'a str],
     ) -> Vec<&'a str> {
         if candidates.len() <= self.entropy_threshold {
@@ -282,10 +283,9 @@ impl RankingStrategy for HybridStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::rc::Rc;
 
-    fn create_test_candidates(words: Vec<&'static str>) -> Vec<Rc<&'static str>> {
-        words.into_iter().map(|w| Rc::new(w)).collect()
+    fn create_test_candidates(words: Vec<&'static str>) -> Vec<&'static str> {
+        words
     }
 
     #[test]

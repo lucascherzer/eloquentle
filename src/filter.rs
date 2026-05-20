@@ -1,4 +1,4 @@
-use std::{collections::HashSet, rc::Rc};
+use std::collections::HashSet;
 
 use crate::{
     info::Info,
@@ -30,7 +30,7 @@ pub type Pattern = [Feedback; 5];
 
 #[derive(Clone)]
 pub struct Filter {
-    words: Vec<Rc<&'static str>>,
+    words: Vec<&'static str>,
     info: HashSet<Info>,
     use_solution_words_only: bool,
 }
@@ -85,7 +85,7 @@ impl Filter {
         self.words = self
             .words
             .iter()
-            .filter(|i| (**i).contains(c))
+            .filter(|i| i.contains(c))
             .cloned()
             .collect();
     }
@@ -93,7 +93,7 @@ impl Filter {
         self.words = self
             .words
             .iter()
-            .filter(|i| !(**i).contains(c))
+            .filter(|i| !i.contains(c))
             .cloned()
             .collect();
     }
@@ -188,7 +188,7 @@ impl Filter {
     }
 
     /// Returns a reference to the internal candidate list
-    pub fn get_candidates(&self) -> &[Rc<&'static str>] {
+    pub fn get_candidates(&self) -> &[&'static str] {
         &self.words
     }
 
@@ -231,7 +231,7 @@ impl Filter {
         // Early optimization: if there are very few candidates, just return a simple score
         if total_candidates <= 2 {
             // For 1-2 candidates, any valid guess is fine - just pick from candidates if possible
-            return if self.words.iter().any(|w| **w == guess) {
+            return if self.words.contains(&guess) {
                 1.0
             } else {
                 0.0
@@ -306,7 +306,7 @@ impl Filter {
     /// Creates a new filter with the given list of words
     pub fn new_with_words(words: Vec<&'static str>) -> Self {
         Filter {
-            words: words.iter().map(|w| Rc::new(*w)).collect(),
+            words,
             info: HashSet::new(),
             use_solution_words_only: false,
         }
@@ -393,7 +393,7 @@ mod tests {
     // Helper function to create a Filter with a custom word list
     fn create_test_filter(words: Vec<&'static str>) -> Filter {
         Filter {
-            words: words.into_iter().map(|w| Rc::new(w)).collect(),
+            words,
             info: std::collections::HashSet::new(),
             use_solution_words_only: false,
         }

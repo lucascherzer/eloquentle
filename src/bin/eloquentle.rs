@@ -1,19 +1,19 @@
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use eloquentle::{
-    filter::{get_best_first_guess, Filter},
+    filter::{Filter, get_best_first_guess},
     info::Info,
 };
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Terminal,
 };
 use std::{
     collections::HashSet,
@@ -153,11 +153,11 @@ impl App {
     }
 
     fn update_error_state(&mut self) {
-        if let Some(time) = self.error_time {
-            if time.elapsed() > Duration::from_secs(3) {
-                self.error_message = None;
-                self.error_time = None;
-            }
+        if let Some(time) = self.error_time
+            && time.elapsed() > Duration::from_secs(3)
+        {
+            self.error_message = None;
+            self.error_time = None;
         }
     }
 }
@@ -185,7 +185,7 @@ fn process_feedback(guess: &str, feedback: &str) -> Result<HashSet<Info>, String
                 let is_elsewhere = feedback.chars().enumerate().any(|(j, c)| {
                     j != i
                         && guess_chars[j] == guess_char
-                        && (c.to_ascii_uppercase() == 'G' || c.to_ascii_uppercase() == 'Y')
+                        && (c.eq_ignore_ascii_case(&'G') || c.eq_ignore_ascii_case(&'Y'))
                 });
 
                 if !is_elsewhere {
@@ -204,7 +204,7 @@ fn process_feedback(guess: &str, feedback: &str) -> Result<HashSet<Info>, String
 /// - Not(x) or x@- or -x
 /// - Correct(a, 2) or a@2
 /// - NotAt(b, 3) or b!@3
-/// Positions are 1-indexed for user input (converted to 0-indexed internally)
+///   Positions are 1-indexed for user input (converted to 0-indexed internally)
 fn parse_info_string(input: &str) -> Result<HashSet<Info>, String> {
     let mut info_set = HashSet::new();
 
@@ -301,19 +301,19 @@ fn parse_not_format(s: &str) -> Option<Info> {
 
 fn parse_correct_format(s: &str) -> Option<Info> {
     // Match: Correct(a, 2) or correct(a, 2) or a@2
-    if let Some(_at_pos) = s.find('@') {
-        if !s.contains('!') {
-            let parts: Vec<&str> = s.split('@').collect();
-            if parts.len() == 2 {
-                let c = parts[0].trim();
-                let pos_str = parts[1].trim();
-                if c.len() == 1 && c.chars().next()?.is_ascii_lowercase() {
-                    if let Ok(pos) = pos_str.parse::<usize>() {
-                        if pos >= 1 && pos <= 5 {
-                            return Some(Info::Correct(c.chars().next()?, pos - 1));
-                        }
-                    }
-                }
+    if let Some(_at_pos) = s.find('@')
+        && !s.contains('!')
+    {
+        let parts: Vec<&str> = s.split('@').collect();
+        if parts.len() == 2 {
+            let c = parts[0].trim();
+            let pos_str = parts[1].trim();
+            if c.len() == 1
+                && c.chars().next()?.is_ascii_lowercase()
+                && let Ok(pos) = pos_str.parse::<usize>()
+                && (1..=5).contains(&pos)
+            {
+                return Some(Info::Correct(c.chars().next()?, pos - 1));
             }
         }
     }
@@ -325,12 +325,12 @@ fn parse_correct_format(s: &str) -> Option<Info> {
         if parts.len() == 2 {
             let c = parts[0].trim();
             let pos_str = parts[1].trim();
-            if c.len() == 1 && c.chars().next()?.is_ascii_lowercase() {
-                if let Ok(pos) = pos_str.parse::<usize>() {
-                    if pos >= 1 && pos <= 5 {
-                        return Some(Info::Correct(c.chars().next()?, pos - 1));
-                    }
-                }
+            if c.len() == 1
+                && c.chars().next()?.is_ascii_lowercase()
+                && let Ok(pos) = pos_str.parse::<usize>()
+                && (1..=5).contains(&pos)
+            {
+                return Some(Info::Correct(c.chars().next()?, pos - 1));
             }
         }
     }
@@ -344,12 +344,12 @@ fn parse_notat_format(s: &str) -> Option<Info> {
         if parts.len() == 2 {
             let c = parts[0].trim();
             let pos_str = parts[1].trim();
-            if c.len() == 1 && c.chars().next()?.is_ascii_lowercase() {
-                if let Ok(pos) = pos_str.parse::<usize>() {
-                    if pos >= 1 && pos <= 5 {
-                        return Some(Info::NotAt(c.chars().next()?, pos - 1));
-                    }
-                }
+            if c.len() == 1
+                && c.chars().next()?.is_ascii_lowercase()
+                && let Ok(pos) = pos_str.parse::<usize>()
+                && (1..=5).contains(&pos)
+            {
+                return Some(Info::NotAt(c.chars().next()?, pos - 1));
             }
         }
     }
@@ -361,12 +361,12 @@ fn parse_notat_format(s: &str) -> Option<Info> {
         if parts.len() == 2 {
             let c = parts[0].trim();
             let pos_str = parts[1].trim();
-            if c.len() == 1 && c.chars().next()?.is_ascii_lowercase() {
-                if let Ok(pos) = pos_str.parse::<usize>() {
-                    if pos >= 1 && pos <= 5 {
-                        return Some(Info::NotAt(c.chars().next()?, pos - 1));
-                    }
-                }
+            if c.len() == 1
+                && c.chars().next()?.is_ascii_lowercase()
+                && let Ok(pos) = pos_str.parse::<usize>()
+                && (1..=5).contains(&pos)
+            {
+                return Some(Info::NotAt(c.chars().next()?, pos - 1));
             }
         }
     }
@@ -415,167 +415,159 @@ fn main() -> Result<(), Box<dyn Error>> {
         app.update_error_state();
 
         // Handle input
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match app.state {
-                        AppState::Running => match key.code {
-                            KeyCode::Char('q') => app.quit = true,
-                            KeyCode::Char('r') => app.reset(),
-                            KeyCode::Char('s') => app.toggle_solution_words(),
-                            KeyCode::Char('f') => app.state = AppState::GettingFeedback,
-                            KeyCode::Char('m') => app.state = AppState::ManualKnowledgeMenu,
-                            _ => {}
-                        },
-                        AppState::GettingFeedback => match key.code {
-                            KeyCode::Char(c) => {
-                                if "GYNgyn".contains(c) && app.feedback_input.len() < 5 {
-                                    app.feedback_input.push(c.to_ascii_uppercase());
-                                }
-                            }
-                            KeyCode::Backspace => {
-                                app.feedback_input.pop();
-                            }
-                            KeyCode::Enter => {
-                                if let Err(e) = app.submit_feedback() {
-                                    app.show_error(e);
-                                }
-                            }
-                            KeyCode::Esc => {
-                                app.feedback_input.clear();
-                                app.state = AppState::Running;
-                            }
-                            _ => {}
-                        },
-                        AppState::ManualKnowledgeMenu => match key.code {
-                            KeyCode::Char('1') => {
-                                app.manual_input_buffer.clear();
-                                app.state = AppState::ManualDirect;
-                            }
-                            KeyCode::Char('2') => {
-                                app.manual_word.clear();
-                                app.manual_feedback.clear();
-                                app.manual_mode_step = 0;
-                                app.state = AppState::ManualIndirect;
-                            }
-                            KeyCode::Esc => {
-                                app.state = AppState::Running;
-                            }
-                            _ => {}
-                        },
-                        AppState::ManualDirect => match key.code {
-                            KeyCode::Char(c) => {
-                                // Accept letters, numbers, special chars for Info syntax
-                                if c.is_ascii_alphanumeric() || "(),@!- ".contains(c) {
-                                    app.manual_input_buffer.push(c);
-                                }
-                            }
-                            KeyCode::Backspace => {
-                                app.manual_input_buffer.pop();
-                            }
-                            KeyCode::Enter => match parse_info_string(&app.manual_input_buffer) {
-                                Ok(info_set) => {
-                                    let count = info_set.len();
-                                    app.filter.add_info_set(&info_set);
-                                    app.show_error(format!("Added {} pieces of knowledge", count));
-                                    app.manual_input_buffer.clear();
-                                    // Trigger recommendation recomputation
-                                    app.loading_idx = 0;
-                                    app.state = AppState::Loading;
-                                }
-                                Err(e) => {
-                                    app.show_error(e);
-                                }
-                            },
-                            KeyCode::Esc => {
-                                app.manual_input_buffer.clear();
-                                app.state = AppState::Running;
-                            }
-                            _ => {}
-                        },
-                        AppState::ManualIndirect => match key.code {
-                            KeyCode::Char(c) => {
-                                if app.manual_mode_step == 0 {
-                                    // Step 1: collecting word
-                                    if c.is_ascii_lowercase() && app.manual_word.len() < 5 {
-                                        app.manual_word.push(c);
-                                    }
-                                } else {
-                                    // Step 2: collecting feedback
-                                    if "GYNgyn".contains(c) && app.manual_feedback.len() < 5 {
-                                        app.manual_feedback.push(c.to_ascii_uppercase());
-                                    }
-                                }
-                            }
-                            KeyCode::Backspace => {
-                                if app.manual_mode_step == 0 {
-                                    app.manual_word.pop();
-                                } else {
-                                    app.manual_feedback.pop();
-                                }
-                            }
-                            KeyCode::Enter => {
-                                if app.manual_mode_step == 0 {
-                                    // Move to step 2 if word is valid
-                                    if app.manual_word.len() == 5 {
-                                        app.manual_mode_step = 1;
-                                    } else {
-                                        app.show_error(
-                                            "Word must be exactly 5 letters".to_string(),
-                                        );
-                                    }
-                                } else {
-                                    // Submit feedback
-                                    if app.manual_feedback.len() == 5 {
-                                        match process_feedback(
-                                            &app.manual_word,
-                                            &app.manual_feedback,
-                                        ) {
-                                            Ok(info_set) => {
-                                                let count = info_set.len();
-                                                app.filter.add_info_set(&info_set);
-
-                                                // Add to history
-                                                app.history.push((
-                                                    app.manual_word.clone(),
-                                                    app.manual_feedback.clone(),
-                                                    0.0, // No entropy for manual entries
-                                                ));
-
-                                                app.show_error(format!(
-                                                    "Added {} pieces of knowledge",
-                                                    count
-                                                ));
-                                                app.manual_word.clear();
-                                                app.manual_feedback.clear();
-                                                app.manual_mode_step = 0;
-                                                // Trigger recommendation recomputation
-                                                app.loading_idx = 0;
-                                                app.state = AppState::Loading;
-                                            }
-                                            Err(e) => {
-                                                app.show_error(e);
-                                            }
-                                        }
-                                    } else {
-                                        app.show_error(
-                                            "Feedback must be exactly 5 characters".to_string(),
-                                        );
-                                    }
-                                }
-                            }
-                            KeyCode::Esc => {
-                                app.manual_word.clear();
-                                app.manual_feedback.clear();
-                                app.manual_mode_step = 0;
-                                app.state = AppState::Running;
-                            }
-                            _ => {}
-                        },
-                        AppState::Loading => {
-                            // No input processing during loading state
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            match app.state {
+                AppState::Running => match key.code {
+                    KeyCode::Char('q') => app.quit = true,
+                    KeyCode::Char('r') => app.reset(),
+                    KeyCode::Char('s') => app.toggle_solution_words(),
+                    KeyCode::Char('f') => app.state = AppState::GettingFeedback,
+                    KeyCode::Char('m') => app.state = AppState::ManualKnowledgeMenu,
+                    _ => {}
+                },
+                AppState::GettingFeedback => match key.code {
+                    KeyCode::Char(c) => {
+                        if "GYNgyn".contains(c) && app.feedback_input.len() < 5 {
+                            app.feedback_input.push(c.to_ascii_uppercase());
                         }
                     }
+                    KeyCode::Backspace => {
+                        app.feedback_input.pop();
+                    }
+                    KeyCode::Enter => {
+                        if let Err(e) = app.submit_feedback() {
+                            app.show_error(e);
+                        }
+                    }
+                    KeyCode::Esc => {
+                        app.feedback_input.clear();
+                        app.state = AppState::Running;
+                    }
+                    _ => {}
+                },
+                AppState::ManualKnowledgeMenu => match key.code {
+                    KeyCode::Char('1') => {
+                        app.manual_input_buffer.clear();
+                        app.state = AppState::ManualDirect;
+                    }
+                    KeyCode::Char('2') => {
+                        app.manual_word.clear();
+                        app.manual_feedback.clear();
+                        app.manual_mode_step = 0;
+                        app.state = AppState::ManualIndirect;
+                    }
+                    KeyCode::Esc => {
+                        app.state = AppState::Running;
+                    }
+                    _ => {}
+                },
+                AppState::ManualDirect => match key.code {
+                    KeyCode::Char(c) => {
+                        // Accept letters, numbers, special chars for Info syntax
+                        if c.is_ascii_alphanumeric() || "(),@!- ".contains(c) {
+                            app.manual_input_buffer.push(c);
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        app.manual_input_buffer.pop();
+                    }
+                    KeyCode::Enter => match parse_info_string(&app.manual_input_buffer) {
+                        Ok(info_set) => {
+                            let count = info_set.len();
+                            app.filter.add_info_set(&info_set);
+                            app.show_error(format!("Added {} pieces of knowledge", count));
+                            app.manual_input_buffer.clear();
+                            // Trigger recommendation recomputation
+                            app.loading_idx = 0;
+                            app.state = AppState::Loading;
+                        }
+                        Err(e) => {
+                            app.show_error(e);
+                        }
+                    },
+                    KeyCode::Esc => {
+                        app.manual_input_buffer.clear();
+                        app.state = AppState::Running;
+                    }
+                    _ => {}
+                },
+                AppState::ManualIndirect => match key.code {
+                    KeyCode::Char(c) => {
+                        if app.manual_mode_step == 0 {
+                            // Step 1: collecting word
+                            if c.is_ascii_lowercase() && app.manual_word.len() < 5 {
+                                app.manual_word.push(c);
+                            }
+                        } else {
+                            // Step 2: collecting feedback
+                            if "GYNgyn".contains(c) && app.manual_feedback.len() < 5 {
+                                app.manual_feedback.push(c.to_ascii_uppercase());
+                            }
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        if app.manual_mode_step == 0 {
+                            app.manual_word.pop();
+                        } else {
+                            app.manual_feedback.pop();
+                        }
+                    }
+                    KeyCode::Enter => {
+                        if app.manual_mode_step == 0 {
+                            // Move to step 2 if word is valid
+                            if app.manual_word.len() == 5 {
+                                app.manual_mode_step = 1;
+                            } else {
+                                app.show_error("Word must be exactly 5 letters".to_string());
+                            }
+                        } else {
+                            // Submit feedback
+                            if app.manual_feedback.len() == 5 {
+                                match process_feedback(&app.manual_word, &app.manual_feedback) {
+                                    Ok(info_set) => {
+                                        let count = info_set.len();
+                                        app.filter.add_info_set(&info_set);
+
+                                        // Add to history
+                                        app.history.push((
+                                            app.manual_word.clone(),
+                                            app.manual_feedback.clone(),
+                                            0.0, // No entropy for manual entries
+                                        ));
+
+                                        app.show_error(format!(
+                                            "Added {} pieces of knowledge",
+                                            count
+                                        ));
+                                        app.manual_word.clear();
+                                        app.manual_feedback.clear();
+                                        app.manual_mode_step = 0;
+                                        // Trigger recommendation recomputation
+                                        app.loading_idx = 0;
+                                        app.state = AppState::Loading;
+                                    }
+                                    Err(e) => {
+                                        app.show_error(e);
+                                    }
+                                }
+                            } else {
+                                app.show_error("Feedback must be exactly 5 characters".to_string());
+                            }
+                        }
+                    }
+                    KeyCode::Esc => {
+                        app.manual_word.clear();
+                        app.manual_feedback.clear();
+                        app.manual_mode_step = 0;
+                        app.state = AppState::Running;
+                    }
+                    _ => {}
+                },
+                AppState::Loading => {
+                    // No input processing during loading state
                 }
             }
         }
@@ -907,9 +899,9 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     // Create a keyboard-like visualization
     let mut knowledge_text = vec![
         Line::from(""),
-        Line::from(recommendation),
+        recommendation,
         Line::from(""),
-        Line::from(word_outline),
+        word_outline,
         Line::from(""),
     ];
 
@@ -949,16 +941,16 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
     knowledge_text.push(Line::from(""));
     knowledge_text.push(Line::from("Position knowledge:"));
 
-    for pos in 0..5 {
+    for (pos, &known) in known_letters.iter().enumerate() {
         let mut position_spans = vec![Span::styled(
             format!("Pos {}: ", pos + 1),
             Style::default().fg(Color::White),
         )];
 
         // Check if we have a correct letter for this position
-        if known_letters[pos] != '_' {
+        if known != '_' {
             position_spans.push(Span::styled(
-                format!("{}", known_letters[pos]),
+                format!("{}", known),
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
@@ -998,7 +990,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     if !remaining_words.is_empty() {
         let words_per_line = 5;
-        let lines_needed = (sample_count + words_per_line - 1) / words_per_line;
+        let lines_needed = sample_count.div_ceil(words_per_line);
 
         for i in 0..lines_needed {
             let start = i * words_per_line;
